@@ -1,0 +1,152 @@
+// The link between the campaign state and the AI: telemetry injected into the prompt,
+// and hidden <sf>…</sf> update tags parsed out of AI replies.
+import { ctx, settings, MODULE, on } from './st.js';
+import { S, commit, snapshot, rollbackTo, fmtDate, locationLabel, cargoUsed, shipClass, currentSystem, galaxy, addLog } from './state.js';
+import { runBlock, needStatuses } from '../systems/sim.js';
+import { fmtInt } from './util.js';
+import { NEEDS, SHIP_SYSTEMS, FACTIONS, SHIP_WEAPONS } from '../data/catalog.js';
+import { factionById, SECURITY_LABELS, systemDistance } from '../systems/galaxy.js';
+
+const TAG_RE = /<sf>([\s\S]*?)<\/sf>|\[sf\]([\s\S]*?)\[\/sf\]/gi;
+const extraSections = [];
+
+/** Lets feature modules add their own lines to the telemetry block. */
+export function registerPromptSection(fn) {
+    extraSections.push(fn);
+}
+
+export function buildTelemetry() {
+    const st = S();
+    if (!st) return '';
+    const cfg = settings();
+    const sys = currentSystem();
+    const fac = factionById(sys.faction);
+    const cap = st.captain;
+    const ship = st.ship;
+    const L = [];
+    L.push('[SHIP-OS TELEMETRY. This is the authoritative state of the story world. Keep the narration consistent with it and never contradict these numbers.]');
+    L.push(`Date: ${fmtDate(st.minutes)} | Alert: ${st.alert.toUpperCase()}`);
+    L.push(`Location: ${locationLabel(st)} (${fac.name} space, ${SECURITY_LABELS[sys.security].toLowerCase()} security, ${sys.star.label.toLowerCase()}${sys.hazard ? `, hazard: ${sys.hazard}` : ''})`);
+
+    const needs = NEEDS.map(n => `${n.name} ${Math.round(cap.needs[n.id])}%`).join(', ');
+    const statuses = needStatuses(st);
+    const inj = cap.injuries.length ? ` Injuries: ${cap.injuries.map(i => `${i.name} [${i.severity}]`).join('; ')}.` : '';
+    L.push(`${cap.name}: Health ${Math.round(cap.health)}/${cap.maxHealth}, Stress ${Math.round(cap.stress)}%.${inj} ${needs}.${statuses.length ? ` Condition: ${statuses.join(', ')}.` : ''} Credits: ${fmtInt(cap.credits)} cr.`);
+    if (cap.inventory.length) L.push(`Carried: ${cap.inventory.map(i => `${i.name} x${i.qty}`).join(', ')}`);
+
+    const damaged = SHIP_SYSTEMS.filter(s => ship.systems[s.id] < 100).map(s => `${s.name} ${Math.round(ship.systems[s.id])}%`);
+    const weapons = ship.weapons.map(w => SHIP_WEAPONS[w.id]?.name ?? w.id).join(', ') || 'unarmed';
+    L.push(`Ship "${ship.name}" (${shipClass(st).name}): Hull ${Math.round(ship.hull)}/${ship.maxHull}, Shields ${Math.round(ship.shields)}/${ship.maxShields}, Fuel ${Math.round(ship.fuel * 10) / 10}/${ship.maxFuel}, Supplies ${Math.round(ship.supplies)} crew-days, Spare parts ${ship.parts}. Weapons: ${weapons}.${damaged.length ? ` Damaged: ${damaged.join(', ')}.` : ' All systems nominal.'}`);
+    L.push(`Cargo (${cargoUsed(st)}/${ship.cargoCap} t): ${st.cargo.length ? st.cargo.map(c => `${c.name} x${c.qty}`).join(', ') : 'empty'}`);
+    if (st.crew.length) L.push(`Crew: ${st.crew.map(c => `${c.name} (${c.role}${c.health < 100 ? `, health ${c.health}` : ''})`).join(', ')}`);
+
+    const active = st.missions.filter(m => m.status === 'active');
+    if (active.length) L.push(`Active missions: ${active.map(m => `${m.title}${m.reward ? ` [${fmtInt(m.reward)} cr]` : ''}`).join('; ')}`);
+    const reps = FACTIONS.filter(f => st.reputation[f.id]).map(f => `${f.name} ${st.reputation[f.id] > 0 ? '+' : ''}${st.reputation[f.id]}`);
+    if (reps.length) L.push(`Reputation: ${reps.join(', ')}`);
+    if (st.trackers.length) L.push(`Trackers: ${st.trackers.map(t => `${t.name} ${t.value}/${t.max}`).join(', ')}`);
+
+    if (cfg.injectNearby) {
+        const g = galaxy();
+        const stations = sys.stations.map(s => s.name).join(', ');
+        const near = g.adj[sys.id].map(e => {
+            const n = g.systems[e.to];
+            return `${n.name} (${systemDistance(g, sys.id, n.id)} ly, ${factionById(n.faction).name})`;
+        });
+        L.push(`Stations here: ${stations}. Jump lanes to: ${near.join(', ')}.`);
+    }
+
+    for (const fn of extraSections) {
+        try {
+            const out = fn(st);
+            if (out) L.push(out);
+        } catch (e) { console.error('[Ship-OS] prompt section failed', e); }
+    }
+    if (st.pendingEvent) L.push(`EVENT TO NARRATE NOW: ${st.pendingEvent}`);
+
+    if (cfg.aiCommands) {
+        L.push('[SHIP-OS UPDATES. When events in your reply change the state above, end the reply with one hidden block listing only what actually changed, one command per line, in this format: <sf>credits -200\ntime +3h\nhull -15</sf>. '
+            + 'Commands: credits/hull/shields/fuel/supplies/health/stress ±N; time +Nh|+Nm|+Nd; '
+            + 'nourishment/hydration/rest/hygiene/morale ±N; system <reactor|engines|shields|weapons|sensors|lifesupport> ±N; '
+            + 'location "place"; dock "station"; undock; jump "star system"; cargo add|remove "name" N; item add|remove "name" N; '
+            + 'injury add "name" minor|moderate|severe|critical; injury heal "name"; rep "faction" ±N; '
+            + 'mission add "title" reward N; mission done|fail "title"; crew add|remove "name" "role"; contact "name" ±N; '
+            + 'tracker "name" ±N; alert green|yellow|red; log "entry". Always advance time. Never mention the block in the narration.]');
+    }
+    return L.join('\n');
+}
+
+export function refreshPrompt() {
+    const c = ctx();
+    const cfg = settings();
+    const text = cfg.enabled && cfg.inject && S() ? buildTelemetry() : '';
+    // position 1 = in-chat at depth, role 0 = system
+    c.setExtensionPrompt(MODULE, text, 1, Number(cfg.injectDepth) || 0, false, 0);
+}
+
+function processMessage(mesId) {
+    const cfg = settings();
+    if (!cfg.enabled || !cfg.aiCommands || !S()) return;
+    const c = ctx();
+    const msg = c.chat?.[mesId];
+    if (!msg || msg.is_user || msg.is_system || typeof msg.mes !== 'string') return;
+    TAG_RE.lastIndex = 0;
+    if (!TAG_RE.test(msg.mes)) return;
+
+    snapshot(mesId);
+    const applied = [];
+    const failed = [];
+    TAG_RE.lastIndex = 0;
+    msg.mes = msg.mes.replace(TAG_RE, (_, a, b) => {
+        for (const r of runBlock(a ?? b ?? '')) {
+            if (!r.text) continue;
+            (r.ok ? applied : failed).push(r.text);
+        }
+        return '';
+    }).trimEnd();
+
+    const st = S();
+    // The reply narrated whatever event was queued, so it is consumed.
+    if (st.pendingEvent) st.pendingEvent = null;
+    msg.extra ??= {};
+    msg.extra.scifi_os = { applied, failed };
+    if (Array.isArray(msg.swipes) && msg.swipe_id !== undefined) msg.swipes[msg.swipe_id] = msg.mes;
+    if (failed.length) console.warn('[Ship-OS] ignored AI commands:', failed);
+    commit('ai');
+    // With streaming the text is already on screen, so redraw it without the tags.
+    try { c.updateMessageBlock?.(mesId, msg); } catch { /* not rendered yet */ }
+    c.saveChat?.();
+}
+
+/** Adds a small "telemetry updated" chip under a message that changed the state. */
+function decorateMessage(mesId) {
+    const info = ctx().chat?.[mesId]?.extra?.scifi_os;
+    const el = document.querySelector(`#chat .mes[mesid="${mesId}"] .mes_block`);
+    if (!el) return;
+    el.querySelector('.sf-chip-row')?.remove();
+    if (!info?.applied?.length) return;
+    const row = document.createElement('div');
+    row.className = 'sf-chip-row';
+    for (const text of info.applied) {
+        const chip = document.createElement('span');
+        chip.className = 'sf-chip';
+        chip.textContent = text;
+        row.appendChild(chip);
+    }
+    el.appendChild(row);
+}
+
+function decorateAll() {
+    document.querySelectorAll('#chat .mes[mesid]').forEach(el => decorateMessage(Number(el.getAttribute('mesid'))));
+}
+
+export function initAiLink() {
+    on('MESSAGE_RECEIVED', (id) => { processMessage(Number(id)); refreshPrompt(); });
+    on('CHARACTER_MESSAGE_RENDERED', (id) => decorateMessage(Number(id)));
+    on('MESSAGE_SWIPED', (id) => { if (rollbackTo(Number(id))) addLog('Timeline reverted (message swiped).', 'sys'); refreshPrompt(); });
+    on('MESSAGE_DELETED', (count) => { rollbackTo(Number(count)); refreshPrompt(); });
+    on('CHAT_CHANGED', () => { refreshPrompt(); setTimeout(decorateAll, 300); });
+    on('MORE_MESSAGES_LOADED', () => setTimeout(decorateAll, 100));
+    on('GENERATION_STARTED', () => refreshPrompt());
+    refreshPrompt();
+}
