@@ -1,11 +1,40 @@
 // Core simulation primitives shared by the panels, the slash command and the AI tag parser.
-import { S, addLog, adjust, cargoUsed, galaxy } from '../core/state.js';
+import { S, addLog, adjust, cargoUsed, cargoCap, galaxy, saveCheckpoint } from '../core/state.js';
 import { settings } from '../core/st.js';
 import { clamp, findByName, uid, norm } from '../core/util.js';
 import { NEEDS, COMMODITIES, SHIP_SYSTEMS, FACTIONS, INJURY_SEVERITY } from '../data/catalog.js';
+import { ATTRIBUTES, SKILL_DEFS, CYBERWARE, CHECK_DCS } from '../data/chargen.js';
+import { decayMult, stressMult, hasFx, gainXp, skillCheck, describeCheck, refreshDerived, makeNpcSheet, cyberLoad, cyberCapacity } from './character.js';
+
+function needShip(st) {
+    if (!st.ship) throw new Error('you have no ship');
+    return st.ship;
+}
+
+function findSkill(name) {
+    const n = norm(name);
+    return SKILL_DEFS.find(x => x.id === n) ?? SKILL_DEFS.find(x => norm(x.name) === n)
+        ?? SKILL_DEFS.find(x => x.id.startsWith(n) || norm(x.name).startsWith(n)) ?? SKILL_DEFS.find(x => norm(x.name).includes(n));
+}
+
+/** The player, or a party member by name. */
+function who(st, name) {
+    if (!name || norm(name) === norm(st.captain.name) || /^(me|self|player)$/i.test(name)) return st.captain;
+    return findByName(st.crew, name);
+}
+
+/** Marks the character as dead. What happens next depends on the campaign's death mode. */
+export function killPlayer(cause = '') {
+    const st = S();
+    if (!st || st.dead) return;
+    st.dead = true;
+    st.deathCause = cause;
+    st.captain.health = 0;
+    addLog(`${st.captain.name} has died${cause ? `: ${cause}` : ''}.`, 'combat');
+}
 
 /** Advances the campaign clock and everything that depends on it. */
-export function advanceTime(minutes) {
+export function advanceTime(minutes, { routine = false } = {}) {
     const st = S();
     if (!st || !Number.isFinite(minutes) || minutes === 0) return;
     const before = st.minutes;
@@ -13,14 +42,27 @@ export function advanceTime(minutes) {
     const hours = (st.minutes - before) / 60;
     if (hours <= 0) return;
     const cfg = settings();
-    if (cfg.needsDecay) {
-        for (const n of NEEDS) {
-            adjust(st.captain.needs, n.id, -n.decay * hours * cfg.needsRate, 0, 100);
+    // Routine time (a long transit with food and a bunk available) keeps the body ticking over
+    // instead of draining it: you eat, drink, wash and sleep as part of the trip.
+    const provided = routine && (!st.ship || st.ship.supplies > 0);
+    if (cfg.needsDecay && provided) {
+        for (const id of ['nourishment', 'hydration', 'rest', 'hygiene']) {
+            const cur = st.captain.needs[id];
+            st.captain.needs[id] = cur < 75 ? Math.min(75, cur + 6 * hours) : Math.max(75, cur - 1 * hours);
         }
+        adjust(st.captain.needs, 'morale', -0.5 * hours * cfg.needsRate * decayMult(st.captain, 'morale'), 0, 100);
+        if (hasFx(st.captain, 'craving')) adjust(st.captain, 'craving', 2.5 * hours * cfg.needsRate, 0, 100);
+    } else if (cfg.needsDecay) {
+        for (const n of NEEDS) {
+            adjust(st.captain.needs, n.id, -n.decay * hours * cfg.needsRate * decayMult(st.captain, n.id), 0, 100);
+        }
+        if (hasFx(st.captain, 'craving')) adjust(st.captain, 'craving', 2.5 * hours * cfg.needsRate, 0, 100);
     }
     // Ship stores: one crew-day of supplies per person per day.
-    const people = 1 + st.crew.length;
-    st.ship.supplies = Math.max(0, st.ship.supplies - (people * hours) / 24);
+    if (st.ship) {
+        const people = 1 + st.crew.length;
+        st.ship.supplies = Math.max(0, st.ship.supplies - (people * hours) / 24);
+    }
 }
 
 export function parseDuration(text) {
@@ -85,13 +127,84 @@ const COMMANDS = {
     credits(st, [v]) {
         return `Credits ${applyDelta(st.captain, 'credits', v, -1e12, 1e12)}`;
     },
-    hull(st, [v]) { return `Hull ${applyDelta(st.ship, 'hull', v, 0, st.ship.maxHull)}`; },
-    shields(st, [v]) { return `Shields ${applyDelta(st.ship, 'shields', v, 0, st.ship.maxShields)}`; },
-    fuel(st, [v]) { return `Fuel ${applyDelta(st.ship, 'fuel', v, 0, st.ship.maxFuel)}`; },
-    supplies(st, [v]) { return `Supplies ${applyDelta(st.ship, 'supplies', v, 0, 9999)}`; },
-    parts(st, [v]) { return `Spare parts ${applyDelta(st.ship, 'parts', v, 0, 999)}`; },
-    health(st, [v]) { return `Health ${applyDelta(st.captain, 'health', v, 0, st.captain.maxHealth)}`; },
-    stress(st, [v]) { return `Stress ${applyDelta(st.captain, 'stress', v, 0, 100)}`; },
+    hull(st, [v]) { return `Hull ${applyDelta(needShip(st), 'hull', v, 0, st.ship.maxHull)}`; },
+    shields(st, [v]) { return `Shields ${applyDelta(needShip(st), 'shields', v, 0, st.ship.maxShields)}`; },
+    fuel(st, [v]) { return `Fuel ${applyDelta(needShip(st), 'fuel', v, 0, st.ship.maxFuel)}`; },
+    supplies(st, [v]) { return `Supplies ${applyDelta(needShip(st), 'supplies', v, 0, 9999)}`; },
+    parts(st, [v]) { return `Spare parts ${applyDelta(needShip(st), 'parts', v, 0, 999)}`; },
+    health(st, args) {
+        // "health -10" hits the player; "health "Ito" -10" hits a party member.
+        const target = args.length > 1 ? who(st, args[0]) : st.captain;
+        if (!target) throw new Error(`nobody called "${args[0]}"`);
+        const out = applyDelta(target, 'health', args[args.length - 1], 0, target.maxHealth);
+        return `${target === st.captain ? 'Health' : `${target.name} health`} ${out}${target.health <= 0 ? ' (DOWN)' : ''}`;
+    },
+    stress(st, [v]) {
+        const d = parseDelta(v);
+        if (d && !d.set && d.v > 0) v = `+${Math.round(d.v * stressMult(st.captain) * 10) / 10}`;
+        return `Stress ${applyDelta(st.captain, 'stress', v, 0, 100)}`;
+    },
+    craving(st, [v]) { return `Craving ${applyDelta(st.captain, 'craving', v, 0, 100)}`; },
+    debt(st, [v]) { return `Debt ${applyDelta(st.captain, 'debt', v, 0, 1e12)}`; },
+    xp(st, args) {
+        const target = args.length > 2 ? who(st, args[0]) : st.captain;
+        if (!target) throw new Error(`nobody called "${args[0]}"`);
+        const [name, v] = args.slice(-2);
+        const def = findSkill(name);
+        if (!def) throw new Error(`unknown skill "${name}"`);
+        const amount = Math.abs(Number(String(v).replace('+', ''))) || 0;
+        const lv = gainXp(target, def.id, amount);
+        if (lv) addLog(`${target.name}: ${def.name} improved to ${target.skills[def.id]}.`, 'sys');
+        return `${target === st.captain ? '' : `${target.name} `}${def.name} +${amount} XP${lv ? ` (now level ${target.skills[def.id]})` : ''}`;
+    },
+    attr(st, [name, v]) {
+        const a = ATTRIBUTES.find(x => x.id === norm(name) || norm(x.name).startsWith(norm(name)));
+        if (!a) throw new Error(`unknown attribute "${name}"`);
+        const out = applyDelta(st.captain.attrs, a.id, v, 1, 10);
+        refreshDerived(st.captain);
+        return `${a.name} ${out}`;
+    },
+    check(st, args) {
+        const target = args.length > 2 ? who(st, args[0]) : st.captain;
+        if (!target) throw new Error(`nobody called "${args[0]}"`);
+        const [name, dcTok = '12'] = args.length > 2 ? args.slice(1) : args;
+        const def = findSkill(name);
+        if (!def) throw new Error(`unknown skill "${name}"`);
+        const named = CHECK_DCS.find(x => norm(x.name).startsWith(norm(dcTok)));
+        const dc = named?.dc ?? (Number(dcTok) || 12);
+        const r = skillCheck(target, def.id, dc);
+        const text = describeCheck(target, r);
+        addLog(text + (r.levels ? ` ${def.name} improved to ${target.skills[def.id]}.` : ''), 'check');
+        st.lastCheck = { ...r, who: target.name, text };
+        return text;
+    },
+    cyber(st, [op, name]) {
+        const c = findByName(CYBERWARE, name) ?? CYBERWARE.find(x => x.id === norm(name));
+        if (!c) throw new Error(`unknown cyberware "${name}"`);
+        const sh = st.captain;
+        if (/^(add|install|\+)$/i.test(op)) {
+            if (sh.cyber.includes(c.id)) throw new Error(`${c.name} is already installed`);
+            if (cyberLoad(sh) + c.load > cyberCapacity(sh)) throw new Error(`not enough capacity for ${c.name} (load ${c.load})`);
+            sh.cyber.push(c.id);
+            refreshDerived(sh);
+            return `Cyberware installed: ${c.name}`;
+        }
+        if (/^(remove|-)$/i.test(op)) {
+            sh.cyber = sh.cyber.filter(x => x !== c.id);
+            refreshDerived(sh);
+            return `Cyberware removed: ${c.name}`;
+        }
+        throw new Error('use: cyber add|remove "Name"');
+    },
+    die(st, args) {
+        killPlayer(args.join(' '));
+        return `${st.captain.name} has died`;
+    },
+    checkpoint(st, args) {
+        const cp = saveCheckpoint(args.join(' ') || 'Checkpoint');
+        if (!cp) throw new Error('cannot save now');
+        return `Checkpoint saved: ${cp.label}`;
+    },
     radiation(st, [v]) { return `Radiation ${applyDelta(st.captain, 'radiation', v, 0, 1000)}`; },
     time(st, [v]) {
         const mins = parseDuration(v);
@@ -105,14 +218,14 @@ const COMMANDS = {
         return `${n.name} ${applyDelta(st.captain.needs, n.id, v, 0, 100)}`;
     },
     skill(st, [name, v]) {
-        const k = Object.keys(st.captain.skills).find(x => x.startsWith(norm(name)));
-        if (!k) throw new Error(`unknown skill "${name}"`);
-        return `${k} ${applyDelta(st.captain.skills, k, v, 0, 10)}`;
+        const def = findSkill(name);
+        if (!def) throw new Error(`unknown skill "${name}"`);
+        return `${def.name} ${applyDelta(st.captain.skills, def.id, v, 0, 10)}`;
     },
     system(st, [name, v]) {
         const sys = findByName(SHIP_SYSTEMS, name) ?? SHIP_SYSTEMS.find(x => x.id.startsWith(norm(name)));
         if (!sys) throw new Error(`unknown ship system "${name}"`);
-        return `${sys.name} ${applyDelta(st.ship.systems, sys.id, v, 0, 100)}%`;
+        return `${sys.name} ${applyDelta(needShip(st).systems, sys.id, v, 0, 100)}%`;
     },
     location(st, [place]) {
         st.loc.place = place ?? '';
@@ -143,7 +256,7 @@ const COMMANDS = {
     cargo(st, [op, name, qty = '1', price]) {
         const n = Math.max(1, Math.round(Number(qty)) || 1);
         if (/^(add|\+|load|gain)$/i.test(op)) {
-            const free = st.ship.cargoCap - cargoUsed(st);
+            const free = cargoCap(st) - cargoUsed(st);
             const take = Math.min(n, Math.max(0, free));
             if (take <= 0) throw new Error('cargo hold is full');
             const known = findByName(COMMODITIES, name);
@@ -212,7 +325,7 @@ const COMMANDS = {
     },
     crew(st, [op, name, role = 'Crew']) {
         if (/^(add|hire|\+)$/i.test(op)) {
-            st.crew.push({ id: uid('cr'), name, role, health: 100, morale: 70, wage: 60, notes: '' });
+            st.crew.push(makeNpcSheet(name, role));
             return `Crew joined: ${name} (${role})`;
         }
         if (/^(remove|fire|lose|-)$/i.test(op)) {
@@ -255,7 +368,7 @@ const ALIASES = {
     credit: 'credits', cr: 'credits', money: 'credits',
     shield: 'shields', hp: 'health', rad: 'radiation',
     needs: 'need', loc: 'location', place: 'location',
-    inventory: 'item', items: 'item', quest: 'mission', missions: 'mission',
+    inventory: 'item', items: 'item', quest: 'mission', party: 'crew', companion: 'crew', death: 'die', save: 'checkpoint', roll: 'check', implant: 'cyber', attribute: 'attr', missions: 'mission',
     reputation: 'rep', faction: 'rep', damage: 'system', subsystem: 'system',
     arrive: 'jump', travel: 'jump', track: 'tracker', supply: 'supplies',
 };
@@ -319,6 +432,8 @@ export function needStatuses(st = S()) {
         if (v <= 15) out.push(n.crit);
         else if (v <= 35) out.push(n.low);
     }
+    if (st.captain.health <= 0) out.unshift('DOWNED');
+    if ((st.captain.craving ?? 0) >= 70) out.push('craving');
     if (st.captain.stress >= 80) out.push('breaking point');
     else if (st.captain.stress >= 55) out.push('stressed');
     return out;

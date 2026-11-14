@@ -1,6 +1,6 @@
 // Navigation tab: pannable, zoomable sector map with route plotting and a system orbit view.
 import { registerTab, registerWidget, registerActions, btn, ask } from './hud.js';
-import { S, commit, addLog, galaxy } from '../core/state.js';
+import { S, commit, addLog, galaxy, saveCheckpoint } from '../core/state.js';
 import { advanceTime } from '../systems/sim.js';
 import { esc, fmtInt, clamp } from '../core/util.js';
 import { toast } from '../core/st.js';
@@ -75,7 +75,9 @@ function systemSvg(sys) {
 
 function jumpCost(st, a, b) {
     const d = systemDistance(galaxy(), a, b);
-    return { d, fuel: Math.round(d * st.ship.fuelPerLy * 10) / 10, hours: Math.round(4 + d * 1.5) };
+    // Without a ship you travel as a passenger: slower, and paid in credits instead of fuel.
+    if (!st.ship) return { d, fuel: 0, fare: Math.round(120 + d * 45), hours: Math.round(10 + d * 2.5) };
+    return { d, fuel: Math.round(d * st.ship.fuelPerLy * 10) / 10, fare: 0, hours: Math.round(4 + d * 1.5) };
 }
 
 function infoBody(st) {
@@ -87,12 +89,12 @@ function infoBody(st) {
     const route = here ? null : findRoute(g, st.loc.system, id);
     let routeLine = '';
     if (route) {
-        let fuel = 0, hours = 0;
+        let fuel = 0, hours = 0, fare = 0;
         for (let i = 0; i < route.path.length - 1; i++) {
             const c = jumpCost(st, route.path[i], route.path[i + 1]);
-            fuel += c.fuel; hours += c.hours;
+            fuel += c.fuel; hours += c.hours; fare += c.fare;
         }
-        routeLine = `<div class="sf-kv"><span>Route</span><b>${route.path.length - 1} jump${route.path.length > 2 ? 's' : ''} · ${route.dist} ly · ${Math.round(fuel * 10) / 10} fuel · ${hours} h</b></div>`;
+        routeLine = `<div class="sf-kv"><span>Route</span><b>${route.path.length - 1} jump${route.path.length > 2 ? 's' : ''} · ${route.dist} ly · ${st.ship ? `${Math.round(fuel * 10) / 10} fuel` : `${fmtInt(fare)} cr fare`} · ${hours} h</b></div>`;
     }
     const stations = sys.stations.map((s, i) => `<li class="sf-row"><span class="sf-grow"><b>${esc(s.name)}</b><br><small class="sf-dim">Orbiting ${esc(s.orbiting)} · ${s.services.join(', ')}</small></span>
         ${here && !(st.loc.docked && st.loc.station === i) ? btn('map-dock', 'Dock', { icon: 'fa-anchor', data: { idx: i } }) : ''}
@@ -101,8 +103,10 @@ function infoBody(st) {
     const next = st.route.length > 1 ? g.systems[st.route[1]] : null;
     const nextCost = next ? jumpCost(st, st.loc.system, next.id) : null;
 
-    return `${next ? `<div class="sf-route-bar"><span><i class="fa-solid fa-route"></i> Course laid in: <b>${esc(g.systems[st.route[st.route.length - 1]].name)}</b> · next ${esc(next.name)} (${nextCost.fuel} fuel, ${nextCost.hours} h)</span>
-        ${btn('map-jump', 'Engage jump', { icon: 'fa-forward-fast', cls: 'primary', disabled: st.ship.fuel < nextCost.fuel })}${btn('map-clear', '', { icon: 'fa-xmark', cls: 'ghost', title: 'Clear course' })}</div>` : ''}
+    return `${next ? `<div class="sf-route-bar"><span><i class="fa-solid fa-route"></i> Course laid in: <b>${esc(g.systems[st.route[st.route.length - 1]].name)}</b> · next ${esc(next.name)} (${st.ship ? `${nextCost.fuel} fuel` : `${fmtInt(nextCost.fare)} cr`}, ${nextCost.hours} h)</span>
+        ${st.ship
+        ? btn('map-jump', 'Engage jump', { icon: 'fa-forward-fast', cls: 'primary', disabled: st.ship.fuel < nextCost.fuel })
+        : btn('map-jump', 'Book passage', { icon: 'fa-ticket', cls: 'primary', disabled: st.captain.credits < nextCost.fare })}${btn('map-clear', '', { icon: 'fa-xmark', cls: 'ghost', title: 'Clear course' })}</div>` : ''}
         <div class="sf-sub"><span style="color:${fac.color}">${esc(fac.name)}</span>${sys.capital ? ' · Capital' : ''}${here ? ' · <b>Current position</b>' : ''}${st.visited[id] ? '' : ' · Unvisited'}</div>
         <div class="sf-kv"><span>Star</span><b>${esc(sys.star.label)} (${esc(sys.star.cls)})</b></div>
         <div class="sf-kv"><span>Economy</span><b>${esc(ECONOMIES[sys.economy].label)}</b></div>
@@ -198,23 +202,31 @@ export function doJump() {
     if (st.route.length < 2) return toast('warning', 'No course laid in.');
     const to = g.systems[st.route[1]];
     const cost = jumpCost(st, st.loc.system, to.id);
-    if (st.ship.systems.engines <= 0) { blip('error'); return toast('error', 'Engines are offline. Repairs required.'); }
-    if (st.ship.fuel < cost.fuel) { blip('error'); return toast('error', `Insufficient fuel: ${cost.fuel} needed.`); }
     const from = g.systems[st.loc.system];
-    st.ship.fuel = Math.round((st.ship.fuel - cost.fuel) * 10) / 10;
-    advanceTime(cost.hours * 60);
-    st.loc = { system: to.id, station: 0, docked: false, place: '' };
+    if (st.ship) {
+        if (st.ship.systems.engines <= 0) { blip('error'); return toast('error', 'Engines are offline. Repairs required.'); }
+        if (st.ship.fuel < cost.fuel) { blip('error'); return toast('error', `Insufficient fuel: ${cost.fuel} needed.`); }
+        st.ship.fuel = Math.round((st.ship.fuel - cost.fuel) * 10) / 10;
+    } else {
+        if (st.captain.credits < cost.fare) { blip('error'); return toast('error', `A berth costs ${cost.fare} cr.`); }
+        st.captain.credits -= cost.fare;
+    }
+    advanceTime(cost.hours * 60, { routine: true });
+    st.loc = { system: to.id, station: 0, docked: !st.ship, place: '' };
     st.visited[to.id] = true;
     st.route = st.route.slice(1);
     if (st.route.length < 2) st.route = [];
     selected = to.id;
     view = null;
-    addLog(`Jump complete: ${from.name} to ${to.name} (${cost.d} ly, ${cost.fuel} fuel, ${cost.hours} h).`, 'nav');
-    st.pendingEvent = `The ${st.ship.name} has just completed a ${cost.hours}-hour jump from ${from.name} and arrived in the ${to.name} system (${factionById(to.faction).name} space, ${SECURITY_LABELS[to.security].toLowerCase()} security${to.hazard ? `, ${to.hazard.toLowerCase()}` : ''}). Describe the arrival.`;
+    addLog(st.ship
+        ? `Jump complete: ${from.name} to ${to.name} (${cost.d} ly, ${cost.fuel} fuel, ${cost.hours} h).`
+        : `Arrived at ${to.stations[0].name}, ${to.name} as a passenger (${cost.fare} cr, ${cost.hours} h).`, 'nav');
+    st.pendingEvent = `${st.ship ? `The ${st.ship.name} has just completed a ${cost.hours}-hour jump from ${from.name}` : `${st.captain.name} has just spent ${cost.hours} hours as a paying passenger on a transport from ${from.name}`} and arrived in the ${to.name} system (${factionById(to.faction).name} space, ${SECURITY_LABELS[to.security].toLowerCase()} security${to.hazard ? `, ${to.hazard.toLowerCase()}` : ''}). Describe the arrival.`;
     for (const fn of jumpHooks) {
         try { fn(st, from, to); } catch (e) { console.error('[Ship-OS] jump hook failed', e); }
     }
     blip('jump');
+    saveCheckpoint(`Arrival: ${to.name}`, true);
     commit('jump');
     toast('success', `Arrived in ${to.name}.`);
 }

@@ -69,7 +69,7 @@ export function initSettings() {
             ${check('needsDecay', 'Needs drain as time passes')}
             <label>Needs drain speed <input type="range" min="0.25" max="3" step="0.25" data-sfs="needsRate"> <span id="sf-rate-val"></span></label>
             <h4>AI link</h4>
-            ${check('inject', 'Send ship and captain telemetry to the AI')}
+            ${check('inject', 'Send character and ship telemetry to the AI')}
             ${check('injectNearby', 'Include local stations and jump lanes')}
             ${check('aiCommands', 'Let the AI update the state with hidden &lt;sf&gt; tags')}
             <label>Injection depth <input type="number" class="text_pole" min="0" max="20" data-sfs="injectDepth"></label>
@@ -109,7 +109,7 @@ export function initSettings() {
         const blob = new Blob([JSON.stringify(st, null, 2)], { type: 'application/json' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `ship-os-${st.ship.name.replace(/\W+/g, '-').toLowerCase()}.json`;
+        a.download = `ship-os-${st.captain.name.replace(/\W+/g, '-').toLowerCase()}.json`;
         a.click();
         setTimeout(() => URL.revokeObjectURL(a.href), 2000);
     });

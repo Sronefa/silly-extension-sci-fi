@@ -1,10 +1,12 @@
 // Core tabs: Bridge (overview), Manifest (cargo and gear), Dossier (missions, standing), Log.
 import { registerTab, registerWidget, registerActions, gauge, btn, ask, confirmAsk } from './hud.js';
-import { S, commit, addLog, fmtDate, locationLabel, cargoUsed, shipClass, currentSystem } from '../core/state.js';
+import { S, commit, addLog, fmtDate, locationLabel, cargoUsed, cargoCap, shipClass, currentSystem } from '../core/state.js';
 import { runCommand, runBlock, advanceTime, needStatuses } from '../systems/sim.js';
 import { esc, fmtInt, uid } from '../core/util.js';
 import { toast, toInput } from '../core/st.js';
-import { NEEDS, SHIP_SYSTEMS, SHIP_WEAPONS, FACTIONS, SKILLS } from '../data/catalog.js';
+import { NEEDS, SHIP_SYSTEMS, SHIP_WEAPONS, FACTIONS } from '../data/catalog.js';
+import { CRAFT_CLASSES } from '../data/chargen.js';
+import { hasFx } from '../systems/character.js';
 import { factionById, SECURITY_LABELS } from '../systems/galaxy.js';
 import { blip } from './sfx.js';
 
@@ -35,7 +37,7 @@ function defineWidgets() {
         },
     });
     registerWidget({
-        id: 'ship', title: (st) => st.ship.name, render(st) {
+        id: 'ship', when: (st) => !!st.ship, title: (st) => st.ship.name, render(st) {
             const ship = st.ship;
             const weapons = ship.weapons.map(w => `<span class="sf-tag">${esc(SHIP_WEAPONS[w.id]?.name ?? w.id)}${w.ammo != null ? ` · ${w.ammo}` : ''}</span>`).join('') || '<span class="sf-dim">Unarmed</span>';
             return `<div class="sf-sub">${esc(shipClass(st).name)} ${btn('ship-rename', '', { icon: 'fa-pen', cls: 'ghost', title: 'Rename ship' })}</div>
@@ -53,30 +55,38 @@ function defineWidgets() {
         },
     });
     registerWidget({
-        id: 'systems', title: () => 'Ship systems',
+        id: 'systems', when: (st) => !!st.ship, title: () => 'Ship systems',
         render: (st) => SHIP_SYSTEMS.map(s => gauge(s.name, st.ship.systems[s.id], 100, { text: `${Math.round(st.ship.systems[s.id])}%`, edit: `system ${s.id}` })).join(''),
+    });
+    registerWidget({
+        id: 'hangar', when: (st) => st.craft.length > 0, title: () => 'Hangar',
+        render: (st) => st.craft.map(c => {
+            const cls = CRAFT_CLASSES[c.classId];
+            return `<div class="sf-craft"><div class="sf-loc-main"><i class="fa-solid ${c.kind === 'mech' ? 'fa-robot' : 'fa-jet-fighter'}"></i> ${esc(c.name)}</div>
+                <div class="sf-loc-sub">${esc(cls?.role ?? c.kind)} · armor ${c.armor} · evasion ${cls?.evasion ?? '?'}</div>
+                ${gauge('Frame', c.hull, c.maxHull)}${gauge('Shields', c.shields, c.maxShields)}
+                <div class="sf-tags">${(cls?.weapons ?? []).map(w => `<span class="sf-tag">${esc(w)}</span>`).join('')}</div>
+                <small class="sf-dim">${esc(cls?.traits ?? '')}</small></div>`;
+        }).join(''),
+    });
+    registerWidget({
+        id: 'noship', when: (st) => !st.ship, title: () => 'No vessel',
+        render: () => `<div class="sf-dim">You do not own a starship. Travel by booking passage on the Nav tab, sign on with a crew, or find a way to get a hull of your own.</div>`,
     });
     registerWidget({
         id: 'vitals', title: (st) => st.captain.name, render(st) {
             const cap = st.captain;
             const statuses = needStatuses(st);
             const injuries = cap.injuries.map(i => `<li class="sf-row"><span class="sf-sev ${i.severity}">${esc(i.severity)}</span><span class="sf-grow">${esc(i.name)}</span>${btn('injury-heal', '', { icon: 'fa-check', cls: 'ghost', data: { name: i.name }, title: 'Mark healed' })}</li>`).join('');
-            return `${gauge('Health', cap.health, cap.maxHealth, { edit: 'health' })}
+            return `${cap.health <= 0 ? `<div class="sf-downed"><b>DOWNED</b><span>Unconscious and dying. Someone has to stabilise you.</span>
+                <div class="sf-actions">${btn('vitals-stable', 'Stabilised', { icon: 'fa-heart-pulse', cls: 'primary' })}${btn('vitals-die', 'Died', { icon: 'fa-skull' })}</div></div>` : ''}
+            ${gauge('Health', cap.health, cap.maxHealth, { edit: 'health' })}
             ${gauge('Stress', cap.stress, 100, { invert: true, edit: 'stress', text: `${Math.round(cap.stress)}%` })}
             ${NEEDS.map(n => gauge(n.name, cap.needs[n.id], 100, { edit: n.id, text: `${Math.round(cap.needs[n.id])}%` })).join('')}
+            ${hasFx(cap, 'craving') ? gauge('Craving', cap.craving, 100, { invert: true, edit: 'craving', text: `${Math.round(cap.craving)}%` }) : ''}
             ${statuses.length ? `<div class="sf-warn-line"><i class="fa-solid fa-triangle-exclamation"></i> ${esc(statuses.join(' · '))}</div>` : ''}
             <div class="sf-sub">Injuries ${btn('injury-add', '', { icon: 'fa-plus', cls: 'ghost', title: 'Add injury' })}</div>
             <ul class="sf-list">${injuries || '<li class="sf-dim">None recorded</li>'}</ul>`;
-        },
-    });
-    registerWidget({
-        id: 'skills', title: () => 'Skills',
-        render: (st) => `<div class="sf-skill-grid">${SKILLS.map(k => `<div class="sf-skill sf-editable" data-sf="edit" data-cmd="skill ${k}" data-label="${k} (0-10)"><span>${k}</span><b>${st.captain.skills[k]}</b></div>`).join('')}</div>`,
-    });
-    registerWidget({
-        id: 'crew', title: () => 'Crew', render(st) {
-            const crew = st.crew.map(c => `<li class="sf-row"><span class="sf-grow"><b>${esc(c.name)}</b> <span class="sf-dim">${esc(c.role)}</span></span><span class="sf-dim">HP ${c.health}</span>${btn('crew-remove', '', { icon: 'fa-user-minus', cls: 'ghost', data: { name: c.name }, title: 'Remove' })}</li>`).join('');
-            return `<ul class="sf-list">${crew || '<li class="sf-dim">No crew aboard</li>'}</ul><div class="sf-actions">${btn('crew-add', 'Add crew member', { icon: 'fa-user-plus' })}</div>`;
         },
     });
     registerWidget({
@@ -97,11 +107,12 @@ function defineWidgets() {
     </li>`;
     registerWidget({
         id: 'account', title: () => 'Account',
-        render: (st) => `<div class="sf-credits sf-editable" data-sf="edit" data-cmd="credits" data-label="Credits"><small>Balance</small><b>${fmtInt(st.captain.credits)} cr</b></div>`,
+        render: (st) => `<div class="sf-credits sf-editable" data-sf="edit" data-cmd="credits" data-label="Credits"><small>Balance</small><b>${fmtInt(st.captain.credits)} cr</b></div>
+            ${st.captain.debt ? `<div class="sf-credits debt sf-editable" data-sf="edit" data-cmd="debt" data-label="Debt"><small>Outstanding debt</small><b>${fmtInt(st.captain.debt)} cr</b></div>` : ''}`,
     });
     registerWidget({
-        id: 'cargo', title: () => 'Cargo hold',
-        render: (st) => `${gauge('Capacity', cargoUsed(st), st.ship.cargoCap, { cls: 'info', text: `${cargoUsed(st)}/${st.ship.cargoCap} t` })}
+        id: 'cargo', title: (st) => (st.ship ? 'Cargo hold' : 'Hauled goods'),
+        render: (st) => `${gauge('Capacity', cargoUsed(st), cargoCap(st), { cls: 'info', text: `${cargoUsed(st)}/${cargoCap(st)} t` })}
             <ul class="sf-list">${st.cargo.map(c => row('cargo', c)).join('') || '<li class="sf-dim">Hold is empty</li>'}</ul>
             <div class="sf-actions">${btn('stack-new', 'Add cargo', { icon: 'fa-box', data: { kind: 'cargo' } })}</div>`,
     });
@@ -161,8 +172,9 @@ function defineWidgets() {
 
 export function initCoreTabs() {
     defineWidgets();
-    registerTab({ id: 'bridge', label: 'Bridge', icon: 'fa-gauge-high', order: 10, widgets: ['position', 'ship', 'systems', 'vitals', 'skills', 'crew', 'clock'] });
-    registerTab({ id: 'manifest', label: 'Manifest', icon: 'fa-boxes-stacked', order: 30, widgets: ['account', 'cargo', 'gear'] });
+    registerTab({ id: 'status', label: 'Status', icon: 'fa-gauge-high', order: 10, widgets: ['position', 'vitals', 'party', 'clock', 'checkpoints'] });
+    registerTab({ id: 'ship', label: 'Ship', icon: 'fa-rocket', order: 16, widgets: ['ship', 'systems', 'hangar', 'noship'] });
+    registerTab({ id: 'gear', label: 'Gear', icon: 'fa-boxes-stacked', order: 30, widgets: ['account', 'loadout', 'gear', 'cargo'] });
     registerTab({ id: 'dossier', label: 'Dossier', icon: 'fa-id-card', order: 40, widgets: ['missions', 'factions', 'contacts', 'trackers'], badge: (st) => st.missions.filter(m => m.status === 'active').length || '' });
     registerTab({ id: 'log', label: 'Log', icon: 'fa-terminal', order: 90, widgets: ['console', 'shiplog'] });
 
@@ -261,7 +273,7 @@ export function initCoreTabs() {
         },
         'status-to-chat'() {
             const st = S();
-            toInput(`*${st.captain.name} checks the console. ${locationLabel(st)}. Hull ${Math.round(st.ship.hull)}/${st.ship.maxHull}, fuel ${Math.round(st.ship.fuel)}/${st.ship.maxFuel}, ${fmtInt(st.captain.credits)} credits.*`);
+            toInput(`*${st.captain.name} checks the console. ${locationLabel(st)}.${st.ship ? ` Hull ${Math.round(st.ship.hull)}/${st.ship.maxHull}, fuel ${Math.round(st.ship.fuel)}/${st.ship.maxFuel}.` : ''} ${fmtInt(st.captain.credits)} credits.*`);
         },
     });
     // Enter runs the console.

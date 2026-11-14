@@ -14,11 +14,15 @@ https://github.com/Sronefa/silly-extension-sci-fi
 
 ## Status
 
-This is the **framework** release. Gameplay rules (character creator, tactical combat, ship combat, economy, fail states) are being designed and are added as modules on top of it.
+The framework and the character system are in. Tactical combat, ship and mech combat, the economy and the fail-state rules are being designed and are added as modules on top.
 
 What works today:
 
-- **Console (HUD)** with tabs: Bridge, Nav, Manifest, Dossier, Log. Full-screen sheet with bottom tabs on phones.
+- **Character creator**: 8 origins, 15 careers at three experience tiers, six attributes, sixteen skills, point-buy, traits, flaws and cyberware. The career decides whether you start with a ship, a mech or fighter, or nothing.
+- **Character sheet**: skills gain XP through use and through paid training at stations. Skill checks roll 2d10 + skill + attribute against a difficulty, with penalties for hunger, exhaustion, stress and wounds.
+- **Party**: AI characters in the chat can be given their own sheet with one tap.
+- **Death**: checkpoints or permadeath, chosen at creation. Reaching zero health means downed, not dead.
+- **Console (HUD)** with tabs: Status, Sheet, Ship, Nav, Gear, Dossier, Log. Full-screen sheet with bottom tabs on phones.
 - **Widgets**: on wide screens every panel can be popped out of the console and dragged anywhere. Positions are remembered.
 - **Campaign per chat**: state is stored in the chat's metadata, so each chat is its own save. Export and import as JSON.
 - **Sector map**: about 28 star systems generated from a seed, with factions, security levels, economies, stations, jump lanes, route plotting, jumps that cost fuel and time, and an orbital view of each system. Pan, pinch and wheel zoom.
@@ -32,7 +36,9 @@ Used by the AI inside `<sf>…</sf>`, by `/sf`, and by the console on the Log ta
 
 | Command | Example |
 | --- | --- |
-| `credits`, `hull`, `shields`, `fuel`, `supplies`, `parts`, `health`, `stress` | `hull -15` |
+| `credits`, `debt`, `hull`, `shields`, `fuel`, `supplies`, `parts`, `health`, `stress` | `hull -15`, `health "Ito" -20` |
+| `xp`, `skill`, `attr`, `check` | `xp firearms 15`, `check pilot 15` |
+| `cyber add/remove`, `die`, `checkpoint` | `cyber add "Optic Suite"` |
 | `time` | `time +3h`, `time +45m`, `time +2d` |
 | `nourishment`, `hydration`, `rest`, `hygiene`, `morale` | `rest +40` |
 | `system <name>` | `system engines -25` |
@@ -51,7 +57,7 @@ Used by the AI inside `<sf>…</sf>`, by `/sf`, and by the console on the Log ta
 index.js            entry point
 src/core/           host wrapper, per-chat state, AI link, slash commands
 src/systems/        simulation: command table, sector generator
-src/data/           static catalog (factions, hulls, weapons, commodities)
+src/data/           static catalog (factions, hulls, weapons, commodities, character options)
 src/ui/             console shell, widgets, map, settings
 style.css           palette tokens, console components, host restyle
 ```

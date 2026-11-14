@@ -40,12 +40,12 @@ export function initSlash() {
         commit('slash');
         return results.map(r => r.text).filter(Boolean).join('; ');
     }, 'Ship-OS: run state commands, e.g. <code>/sf credits -200; time +2h</code>. With no text it opens the console.', ['shipos']);
-    add('sf-open', (tab) => { openHud(tab.trim() || undefined); return ''; }, 'Ship-OS: open the console, optionally on a tab (bridge, nav, manifest, dossier, log).');
+    add('sf-open', (tab) => { openHud(tab.trim() || undefined); return ''; }, 'Ship-OS: open the console, optionally on a tab (status, sheet, ship, nav, gear, dossier, log).');
     add('sf-status', () => buildTelemetry(), 'Ship-OS: returns the telemetry text that is sent to the AI.');
 
     const st = () => S();
     macro('sf_date', () => (st() ? fmtDate(st().minutes) : ''), 'Ship-OS in-universe date');
     macro('sf_location', () => (st() ? locationLabel(st()) : ''), 'Ship-OS current location');
     macro('sf_credits', () => (st() ? fmtInt(st().captain.credits) : ''), 'Ship-OS credits');
-    macro('sf_ship', () => st()?.ship.name ?? '', 'Ship-OS ship name');
+    macro('sf_ship', () => st()?.ship?.name ?? '', 'Ship-OS ship name');
 }

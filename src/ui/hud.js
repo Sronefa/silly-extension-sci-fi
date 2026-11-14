@@ -1,9 +1,8 @@
 // The HUD shell: floating launcher, status strip above the chat, and the tabbed panel.
 // Feature modules register tabs and click actions here; the shell owns layout and redraws.
 import { ctx, settings, saveSettings, hasChat, toast } from '../core/st.js';
-import { S, onChange, fmtDate, locationLabel, newCampaign } from '../core/state.js';
+import { S, onChange, fmtDate, locationLabel } from '../core/state.js';
 import { esc, pct, gaugeClass, fmtInt, debounce } from '../core/util.js';
-import { SHIP_CLASSES } from '../data/catalog.js';
 import { needStatuses } from '../systems/sim.js';
 import { blip } from './sfx.js';
 
@@ -34,7 +33,7 @@ const isFloating = (id) => !isNarrow() && !!floating()[id];
 
 function widgetHtml(id, st, { floated = false } = {}) {
     const w = widgets.get(id);
-    if (!w) return '';
+    if (!w || (w.when && !w.when(st))) return '';
     let body;
     try { body = w.render(st); } catch (e) { console.error('[Ship-OS] widget failed', id, e); body = `<div class="sf-warn-line">Widget error: ${esc(e.message)}</div>`; }
     const tools = floated
@@ -45,7 +44,7 @@ function widgetHtml(id, st, { floated = false } = {}) {
 
 function renderTabBody(tab, st) {
     if (tab.render) return tab.render(st);
-    return tab.widgets.map(id => (isFloating(id)
+    return tab.widgets.filter(id => { const w = widgets.get(id); return w && (!w.when || w.when(st)); }).map(id => (isFloating(id)
         ? `<div class="sf-floating-note"><i class="fa-solid fa-up-right-from-square"></i> ${esc(widgets.get(id)?.title(st) ?? id)} is floating ${btn('widget-dock', 'Return', { cls: 'ghost', data: { id } })}</div>`
         : widgetHtml(id, st))).join('');
 }
@@ -59,7 +58,7 @@ function renderFloating() {
     const st = S();
     const cfg = settings();
     const map = floating();
-    const ids = cfg.enabled && st && !isNarrow() ? Object.keys(map).filter(id => widgets.has(id)) : [];
+    const ids = cfg.enabled && st && !st.dead && !isNarrow() ? Object.keys(map).filter(id => widgets.has(id) && (!widgets.get(id).when || widgets.get(id).when(st))) : [];
     for (const el of [...floatLayer.children]) if (!ids.includes(el.dataset.float)) el.remove();
     for (const id of ids) {
         let el = floatLayer.querySelector(`[data-float="${id}"]`);
@@ -159,33 +158,16 @@ export async function confirmAsk(title, text = '') {
     return window.confirm(`${title}\n${text}`);
 }
 
-function wizardHtml() {
-    if (!hasChat()) {
-        return `<div class="sf-empty"><i class="fa-solid fa-satellite-dish"></i><p>NO UPLINK</p><small>Open a chat to bring Ship-OS online.</small></div>`;
-    }
-    const classes = Object.values(SHIP_CLASSES).map(c =>
-        `<option value="${c.id}"${c.id === 'mule' ? ' selected' : ''}>${esc(c.name)}: hull ${c.hull}, cargo ${c.cargo} t</option>`).join('');
-    return `<div class="sf-wizard">
-        <div class="sf-boot">
-            <div>SHIP-OS v1.0 // COLD START</div>
-            <div>REACTOR ............ STANDBY</div>
-            <div>NAV DATABASE ....... EMPTY</div>
-            <div>CREW MANIFEST ...... UNREGISTERED</div>
-        </div>
-        ${panel('Register vessel', `
-            <label class="sf-field"><span>Captain</span><input class="sf-input" id="sf-w-captain" value="${esc(ctx().name1 || 'Captain')}"></label>
-            <label class="sf-field"><span>Ship name</span><input class="sf-input" id="sf-w-ship" value="Wandering Star"></label>
-            <label class="sf-field"><span>Hull class</span><select class="sf-input" id="sf-w-class">${classes}</select></label>
-            <label class="sf-field"><span>Starting funds</span><select class="sf-input" id="sf-w-diff">
-                <option value="easy">Comfortable (25,000 cr)</option>
-                <option value="normal" selected>Standard (10,000 cr)</option>
-                <option value="hard">Scraping by (3,000 cr)</option>
-            </select></label>
-            <label class="sf-field"><span>Sector seed</span><input class="sf-input" id="sf-w-seed" placeholder="random" inputmode="numeric"></label>
-            <div class="sf-actions">${btn('wizard-start', 'Initialise campaign', { icon: 'fa-power-off', cls: 'primary' })}</div>
-            <small class="sf-dim">The campaign is saved inside this chat. Each chat has its own ship, sector and save.</small>
-        `)}
-    </div>`;
+let wizard = { html: () => '', mount: () => {} };
+let deathScreen = () => '';
+/** The character creator and the death screen live in their own module and plug in here. */
+export function setScreens(w, d) {
+    wizard = w;
+    deathScreen = d;
+}
+
+function offlineHtml() {
+    return `<div class="sf-empty"><i class="fa-solid fa-satellite-dish"></i><p>NO UPLINK</p><small>Open a chat to bring Ship-OS online.</small></div>`;
 }
 
 function renderHud() {
@@ -196,9 +178,13 @@ function renderHud() {
     root.dataset.alert = st?.alert ?? 'green';
     const nav = root.querySelector('.sf-tabs');
     const body = root.querySelector('.sf-body');
-    if (!st) {
+    if (!st || st.dead) {
         nav.innerHTML = '';
-        body.innerHTML = wizardHtml();
+        const scroll = body.scrollTop;
+        body.dataset.tab = '';
+        body.innerHTML = !hasChat() ? offlineHtml() : st?.dead ? deathScreen(st) : wizard.html();
+        body.scrollTop = scroll;
+        if (!st && hasChat()) wizard.mount(body);
         return;
     }
     if (!tabs.some(t => t.id === active)) active = tabs[0]?.id;
@@ -206,8 +192,6 @@ function renderHud() {
         <i class="fa-solid ${t.icon}"></i><span>${esc(t.label)}</span>${t.badge?.(st) ? `<b class="sf-badge">${esc(t.badge(st))}</b>` : ''}</button>`).join('');
     const tab = tabs.find(t => t.id === active);
     const scroll = body.scrollTop;
-    // Tabs that own live widgets (the map) can update in place instead of being rebuilt.
-    if (body.dataset.tab === active && tab.update?.(body, st)) return;
     body.dataset.tab = active;
     body.innerHTML = renderTabBody(tab, st);
     tab.mount?.(body, st);
@@ -219,7 +203,7 @@ function renderStrip() {
     if (!strip) return;
     const cfg = settings();
     const st = S();
-    strip.hidden = !(cfg.enabled && cfg.strip && st);
+    strip.hidden = !(cfg.enabled && cfg.strip && st && !st.dead);
     if (strip.hidden) return;
     const mini = (icon, v, max, title) => {
         const p = pct(v, max);
@@ -231,10 +215,10 @@ function renderStrip() {
         <span class="sf-strip-date">${esc(fmtDate(st.minutes))}</span>
         <span class="sf-strip-loc"><i class="fa-solid fa-location-crosshairs"></i> ${esc(locationLabel(st))}</span>
         <span class="sf-strip-gauges">
-            ${mini('fa-shield-halved', st.ship.shields, st.ship.maxShields, 'Shields')}
-            ${mini('fa-cube', st.ship.hull, st.ship.maxHull, 'Hull')}
-            ${mini('fa-gas-pump', st.ship.fuel, st.ship.maxFuel, 'Fuel')}
+            ${st.ship ? mini('fa-shield-halved', st.ship.shields, st.ship.maxShields, 'Shields') + mini('fa-cube', st.ship.hull, st.ship.maxHull, 'Hull') + mini('fa-gas-pump', st.ship.fuel, st.ship.maxFuel, 'Fuel') : ''}
             ${mini('fa-heart-pulse', st.captain.health, st.captain.maxHealth, 'Health')}
+            ${mini('fa-utensils', Math.min(st.captain.needs.nourishment, st.captain.needs.hydration), 100, 'Food and water')}
+            ${mini('fa-bed', st.captain.needs.rest, 100, 'Rest')}
         </span>
         ${statuses.length ? `<span class="sf-strip-warn"><i class="fa-solid fa-triangle-exclamation"></i> ${esc(statuses.join(', '))}</span>` : ''}
         <span class="sf-strip-cr">${fmtInt(st.captain.credits)} cr</span>`;
@@ -255,7 +239,7 @@ export const redraw = debounce(() => {
 }, 30);
 
 export function openHud(tabId) {
-    if (tabId) active = tabId;
+    if (tabId && tabs.some(t => t.id === tabId)) active = tabId;
     root.classList.add('open');
     document.body.classList.add('sf-hud-open');
     renderHud();
@@ -365,19 +349,6 @@ export function initHud() {
             delete floating()[el.dataset.id];
             saveSettings();
             redraw();
-        },
-        'wizard-start': () => {
-            const val = (id) => document.getElementById(id)?.value?.trim();
-            const seedText = val('sf-w-seed');
-            newCampaign({
-                captain: val('sf-w-captain'),
-                shipName: val('sf-w-ship'),
-                shipClass: val('sf-w-class'),
-                difficulty: val('sf-w-diff'),
-                seed: seedText && Number.isFinite(Number(seedText)) ? Number(seedText) >>> 0 : undefined,
-            });
-            blip('boot');
-            toast('success', 'All systems online. Welcome aboard, Captain.');
         },
     });
 

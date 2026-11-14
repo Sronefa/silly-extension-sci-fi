@@ -1,10 +1,12 @@
 // The link between the campaign state and the AI: telemetry injected into the prompt,
 // and hidden <sf>…</sf> update tags parsed out of AI replies.
 import { ctx, settings, MODULE, on } from './st.js';
-import { S, commit, snapshot, rollbackTo, fmtDate, locationLabel, cargoUsed, shipClass, currentSystem, galaxy, addLog } from './state.js';
+import { S, commit, snapshot, rollbackTo, fmtDate, locationLabel, cargoUsed, cargoCap, shipClass, currentSystem, galaxy, addLog } from './state.js';
 import { runBlock, needStatuses } from '../systems/sim.js';
 import { fmtInt } from './util.js';
-import { NEEDS, SHIP_SYSTEMS, FACTIONS, SHIP_WEAPONS } from '../data/catalog.js';
+import { NEEDS, SHIP_SYSTEMS, FACTIONS, SHIP_WEAPONS, PERSONAL_WEAPONS, ARMORS } from '../data/catalog.js';
+import { ATTRIBUTES, SKILL_DEFS, TRAITS, FLAWS, CYBERWARE, CRAFT_CLASSES } from '../data/chargen.js';
+import { attrOf, skillOf, originOf, hasFx } from '../systems/character.js';
 import { factionById, SECURITY_LABELS, systemDistance } from '../systems/galaxy.js';
 
 const TAG_RE = /<sf>([\s\S]*?)<\/sf>|\[sf\]([\s\S]*?)\[\/sf\]/gi;
@@ -18,6 +20,7 @@ export function registerPromptSection(fn) {
 export function buildTelemetry() {
     const st = S();
     if (!st) return '';
+    if (st.dead) return `[SHIP-OS: ${st.captain.name} is dead${st.deathCause ? ` (${st.deathCause})` : ''}. Narrate the death and its aftermath. The character takes no further actions.]`;
     const cfg = settings();
     const sys = currentSystem();
     const fac = factionById(sys.faction);
@@ -31,14 +34,36 @@ export function buildTelemetry() {
     const needs = NEEDS.map(n => `${n.name} ${Math.round(cap.needs[n.id])}%`).join(', ');
     const statuses = needStatuses(st);
     const inj = cap.injuries.length ? ` Injuries: ${cap.injuries.map(i => `${i.name} [${i.severity}]`).join('; ')}.` : '';
-    L.push(`${cap.name}: Health ${Math.round(cap.health)}/${cap.maxHealth}, Stress ${Math.round(cap.stress)}%.${inj} ${needs}.${statuses.length ? ` Condition: ${statuses.join(', ')}.` : ''} Credits: ${fmtInt(cap.credits)} cr.`);
+    const origin = originOf(cap.origin);
+    const named = (list, ids) => ids.map(id => list.find(x => x.id === id)?.name).filter(Boolean);
+    const top = SKILL_DEFS.map(d => ({ d, v: skillOf(cap, d.id) })).filter(x => x.v > 0).sort((x, y) => y.v - x.v).slice(0, 8).map(x => `${x.d.name} ${x.v}`);
+    L.push(`PLAYER CHARACTER ${cap.name}: ${origin ? `${origin.name}, ` : ''}${cap.role}.${cap.look ? ` Appearance: ${cap.look}.` : ''} Attributes (2-8 human range): ${ATTRIBUTES.map(a => `${a.name} ${attrOf(cap, a.id)}`).join(', ')}. Skills (0-10): ${top.join(', ') || 'none'}.`);
+    const traits = [...named(TRAITS, cap.traits), ...named(FLAWS, cap.flaws)];
+    const cyber = named(CYBERWARE, cap.cyber);
+    if (traits.length || cyber.length) L.push(`${traits.length ? `Traits and flaws: ${traits.join(', ')}. ` : ''}${cyber.length ? `Cyberware: ${cyber.join(', ')}.` : ''}`);
+    L.push(`Condition: Health ${Math.round(cap.health)}/${cap.maxHealth}${cap.health <= 0 ? ' (DOWNED, unconscious and dying without aid)' : ''}, Stress ${Math.round(cap.stress)}%.${inj} ${needs}.${hasFx(cap, 'craving') ? ` Craving ${Math.round(cap.craving)}%.` : ''}${statuses.length ? ` Status: ${statuses.join(', ')}.` : ''}`);
+    L.push(`Armed with ${PERSONAL_WEAPONS[cap.weapon]?.name ?? cap.weapon}, wearing ${ARMORS[cap.armor]?.name ?? cap.armor}. Credits: ${fmtInt(cap.credits)} cr${cap.debt ? `, debt ${fmtInt(cap.debt)} cr` : ''}.`);
     if (cap.inventory.length) L.push(`Carried: ${cap.inventory.map(i => `${i.name} x${i.qty}`).join(', ')}`);
 
-    const damaged = SHIP_SYSTEMS.filter(s => ship.systems[s.id] < 100).map(s => `${s.name} ${Math.round(ship.systems[s.id])}%`);
-    const weapons = ship.weapons.map(w => SHIP_WEAPONS[w.id]?.name ?? w.id).join(', ') || 'unarmed';
-    L.push(`Ship "${ship.name}" (${shipClass(st).name}): Hull ${Math.round(ship.hull)}/${ship.maxHull}, Shields ${Math.round(ship.shields)}/${ship.maxShields}, Fuel ${Math.round(ship.fuel * 10) / 10}/${ship.maxFuel}, Supplies ${Math.round(ship.supplies)} crew-days, Spare parts ${ship.parts}. Weapons: ${weapons}.${damaged.length ? ` Damaged: ${damaged.join(', ')}.` : ' All systems nominal.'}`);
-    L.push(`Cargo (${cargoUsed(st)}/${ship.cargoCap} t): ${st.cargo.length ? st.cargo.map(c => `${c.name} x${c.qty}`).join(', ') : 'empty'}`);
-    if (st.crew.length) L.push(`Crew: ${st.crew.map(c => `${c.name} (${c.role}${c.health < 100 ? `, health ${c.health}` : ''})`).join(', ')}`);
+    if (ship) {
+        const damaged = SHIP_SYSTEMS.filter(s => ship.systems[s.id] < 100).map(s => `${s.name} ${Math.round(ship.systems[s.id])}%`);
+        const weapons = ship.weapons.map(w => SHIP_WEAPONS[w.id]?.name ?? w.id).join(', ') || 'unarmed';
+        L.push(`Owns ship "${ship.name}" (${shipClass(st).name}): Hull ${Math.round(ship.hull)}/${ship.maxHull}, Shields ${Math.round(ship.shields)}/${ship.maxShields}, Fuel ${Math.round(ship.fuel * 10) / 10}/${ship.maxFuel}, Supplies ${Math.round(ship.supplies)} crew-days, Spare parts ${ship.parts}. Weapons: ${weapons}.${damaged.length ? ` Damaged: ${damaged.join(', ')}.` : ' All systems nominal.'}`);
+    } else {
+        L.push(`${cap.name} does not own a starship and must book passage, sign on as crew, or acquire one.`);
+    }
+    for (const c of st.craft) {
+        const cls = CRAFT_CLASSES[c.classId];
+        L.push(`Assigned ${c.kind} "${c.name}" (${cls?.role ?? c.kind}): Hull ${Math.round(c.hull)}/${c.maxHull}, Shields ${Math.round(c.shields)}/${c.maxShields}, Armor ${c.armor}. Weapons: ${cls?.weapons.join(', ') ?? 'none'}.`);
+    }
+    L.push(`${ship ? 'Cargo' : 'Hauled goods'} (${cargoUsed(st)}/${cargoCap(st)} t): ${st.cargo.length ? st.cargo.map(c => `${c.name} x${c.qty}`).join(', ') : 'empty'}`);
+    if (st.crew.length) {
+        L.push(`Party: ${st.crew.map(c => {
+            const best = SKILL_DEFS.map(d => ({ d, v: skillOf(c, d.id) })).filter(x => x.v > 0).sort((x, y) => y.v - x.v).slice(0, 3).map(x => `${x.d.name} ${x.v}`);
+            return `${c.name} (${c.role}; health ${Math.round(c.health)}/${c.maxHealth}${c.health <= 0 ? ' DOWNED' : ''}${best.length ? `; ${best.join(', ')}` : ''}${c.injuries.length ? `; injured: ${c.injuries.map(i => i.name).join(', ')}` : ''})`;
+        }).join('; ')}`);
+    }
+    if (st.lastCheck) L.push(`LATEST SKILL CHECK (narrate this outcome, do not change it): ${st.lastCheck.text}`);
 
     const active = st.missions.filter(m => m.status === 'active');
     if (active.length) L.push(`Active missions: ${active.map(m => `${m.title}${m.reward ? ` [${fmtInt(m.reward)} cr]` : ''}`).join('; ')}`);
@@ -66,12 +91,12 @@ export function buildTelemetry() {
 
     if (cfg.aiCommands) {
         L.push('[SHIP-OS UPDATES. When events in your reply change the state above, end the reply with one hidden block listing only what actually changed, one command per line, in this format: <sf>credits -200\ntime +3h\nhull -15</sf>. '
-            + 'Commands: credits/hull/shields/fuel/supplies/health/stress ±N; time +Nh|+Nm|+Nd; '
+            + 'Commands: credits/debt/hull/shields/fuel/supplies/health/stress ±N; health "party member" ±N; time +Nh|+Nm|+Nd; xp <skill> N (award 5-20 when a skill was meaningfully used); '
             + 'nourishment/hydration/rest/hygiene/morale ±N; system <reactor|engines|shields|weapons|sensors|lifesupport> ±N; '
             + 'location "place"; dock "station"; undock; jump "star system"; cargo add|remove "name" N; item add|remove "name" N; '
             + 'injury add "name" minor|moderate|severe|critical; injury heal "name"; rep "faction" ±N; '
             + 'mission add "title" reward N; mission done|fail "title"; crew add|remove "name" "role"; contact "name" ±N; '
-            + 'tracker "name" ±N; alert green|yellow|red; log "entry". Always advance time. Never mention the block in the narration.]');
+            + 'tracker "name" ±N; alert green|yellow|red; log "entry"; die "cause" (only if the character is truly killed). Always advance time. Never mention the block in the narration.]');
     }
     return L.join('\n');
 }
@@ -86,14 +111,22 @@ export function refreshPrompt() {
 
 function processMessage(mesId) {
     const cfg = settings();
-    if (!cfg.enabled || !cfg.aiCommands || !S()) return;
+    if (!cfg.enabled || !S()) return;
     const c = ctx();
     const msg = c.chat?.[mesId];
     if (!msg || msg.is_user || msg.is_system || typeof msg.mes !== 'string') return;
-    TAG_RE.lastIndex = 0;
-    if (!TAG_RE.test(msg.mes)) return;
-
+    // Snapshot first, so a swipe or delete restores everything this reply consumed or changed.
     snapshot(mesId);
+    // Any AI reply has narrated whatever event or check was queued, so they are consumed.
+    const cur = S();
+    if (cur.pendingEvent || cur.lastCheck) {
+        cur.pendingEvent = null;
+        cur.lastCheck = null;
+        commit('consumed');
+    }
+    TAG_RE.lastIndex = 0;
+    if (!cfg.aiCommands || !TAG_RE.test(msg.mes)) return;
+
     const applied = [];
     const failed = [];
     TAG_RE.lastIndex = 0;
@@ -105,9 +138,6 @@ function processMessage(mesId) {
         return '';
     }).trimEnd();
 
-    const st = S();
-    // The reply narrated whatever event was queued, so it is consumed.
-    if (st.pendingEvent) st.pendingEvent = null;
     msg.extra ??= {};
     msg.extra.scifi_os = { applied, failed };
     if (Array.isArray(msg.swipes) && msg.swipe_id !== undefined) msg.swipes[msg.swipe_id] = msg.mes;
