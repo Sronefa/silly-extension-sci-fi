@@ -25,7 +25,7 @@ export function onChange(fn) {
 export function S() {
     const st = ctx().chatMetadata?.[KEY] ?? null;
     // Saves from older versions are upgraded the first time they are touched.
-    if (st && st.version !== 2) migrate(st);
+    if (st && st.version !== 3) migrate(st);
     return st;
 }
 
@@ -88,7 +88,7 @@ export function newCampaign(opts = {}) {
     const sheet = opts.sheet;
 
     const state = {
-        version: 2,
+        version: 3,
         seed,
         minutes: 141 * 1440 + 9 * 60,
         captain: sheet,
@@ -184,7 +184,7 @@ export function migrate(st) {
     st.alert ??= 'green';
     st.deathMode ??= 'checkpoint';
     st.dead ??= false;
-    st.version = 2;
+    st.version = 3;
     return st;
 }
 
@@ -307,6 +307,11 @@ export function fmtDate(minutes = S()?.minutes ?? 0) {
 export function locationLabel(st = S()) {
     if (!st) return '';
     const sys = getGalaxy(st.seed).systems[st.loc.system];
+    if (st.transit) {
+        const to = getGalaxy(st.seed).systems[st.transit.to];
+        const where = st.transit.passenger ? 'Aboard a passenger transport' : `Aboard the ${st.ship?.name ?? 'ship'}`;
+        return `${st.loc.place || where}, in jump transit ${sys.name} to ${to.name}`;
+    }
     if (st.loc.place) return `${st.loc.place}, ${sys.name}`;
     if (st.loc.docked) return `Docked: ${(sys.stations[st.loc.station] ?? sys.stations[0]).name}, ${sys.name}`;
     return `In space, ${sys.name} system`;

@@ -79,34 +79,8 @@ export const ENEMY_SHIPS = {
     frigate: { id: 'frigate', name: 'Pirate Frigate', hull: 620, shields: 260, armor: 8, evasion: 9, weapons: ['rail', 'lance', 'missile'], prefRange: 1, bounty: 30000 },
 };
 
-// Personal weapons. acc modifier added to the skill check; dmg is a range.
-export const PERSONAL_WEAPONS = {
-    fists: { id: 'fists', name: 'Unarmed', dmg: [1, 4], acc: 0 },
-    knife: { id: 'knife', name: 'Vibro-knife', dmg: [3, 8], acc: 5 },
-    pistol: { id: 'pistol', name: 'Gauss Pistol', dmg: [5, 11], acc: 10 },
-    smg: { id: 'smg', name: 'Flechette SMG', dmg: [6, 14], acc: 5 },
-    rifle: { id: 'rifle', name: 'Pulse Rifle', dmg: [8, 16], acc: 15 },
-    shotgun: { id: 'shotgun', name: 'Breaching Shotgun', dmg: [10, 20], acc: 0 },
-    sniper: { id: 'sniper', name: 'Coil Marksman Rifle', dmg: [14, 24], acc: 20 },
-    arc: { id: 'arc', name: 'Arc Thrower', dmg: [9, 18], acc: 10 },
-};
-
-export const ARMORS = {
-    none: { id: 'none', name: 'Shipboard Fatigues', armor: 0 },
-    vest: { id: 'vest', name: 'Ballistic Vest', armor: 2 },
-    flak: { id: 'flak', name: 'Flak Jacket', armor: 3 },
-    evasuit: { id: 'evasuit', name: 'Armored EVA Suit', armor: 4 },
-    marine: { id: 'marine', name: 'Marine Hardsuit', armor: 6 },
-};
-
-export const ENEMY_TROOPERS = {
-    thug: { name: 'Dockside Thug', hp: 18, armor: 0, weapon: 'knife', skill: 2 },
-    pirate: { name: 'Ashen Boarder', hp: 24, armor: 2, weapon: 'smg', skill: 3 },
-    merc: { name: 'Combine Security', hp: 28, armor: 3, weapon: 'rifle', skill: 4 },
-    marine: { name: 'Hegemony Marine', hp: 34, armor: 5, weapon: 'rifle', skill: 5 },
-    drone: { name: 'Security Drone', hp: 20, armor: 4, weapon: 'arc', skill: 3 },
-    creature: { name: 'Xenofauna', hp: 30, armor: 1, weapon: 'fists', skill: 4, dmgOverride: [6, 14] },
-};
+// Personal weapons and armor live with the combat data.
+export { WEAPONS as PERSONAL_WEAPONS, ARMOR as ARMORS } from './combat.js';
 
 export const SKILLS = ['piloting', 'gunnery', 'engineering', 'medicine', 'combat', 'tactics', 'negotiation', 'science'];
 

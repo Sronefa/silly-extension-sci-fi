@@ -668,3 +668,75 @@ body.sf-theme ::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.25); }
     .sf-buy-row.compact { padding: 0; }
 }
 @media (max-width: 380px) { .sf-cards { grid-template-columns: 1fr; } }
+
+/* ---------- Combat, body, time ---------- */
+.sf-field { display: block; width: 100%; background: radial-gradient(ellipse at 50% 40%, rgba(var(--sf-accent-rgb), 0.08), transparent 70%), #02060b; user-select: none; -webkit-user-select: none; }
+.sf-zlink { stroke: rgba(var(--sf-accent-rgb), 0.45); stroke-width: 2.4; }
+.sf-zlink.blocked { stroke: var(--sf-warn); stroke-dasharray: 3 4; opacity: 0.7; }
+.sf-zone { cursor: pointer; }
+.sf-zone > rect { fill: rgba(10, 24, 38, 0.94); stroke: var(--sf-line-strong); stroke-width: 1; }
+.sf-zone.cover1 > rect { fill: rgba(16, 36, 52, 0.96); }
+.sf-zone.cover2 > rect { fill: rgba(24, 48, 64, 0.97); stroke-width: 2; }
+.sf-zone.here > rect { stroke: var(--sf-accent); stroke-width: 2; }
+.sf-zone.unseen > rect { fill: rgba(4, 8, 12, 0.97); stroke-dasharray: 2 3; opacity: 0.75; }
+.sf-zone.reach > rect { stroke: var(--sf-ok); stroke-width: 2; animation: sf-pulse 1.4s infinite; }
+.sf-zone.gren > rect { stroke: var(--sf-crit); stroke-width: 2.5; fill: rgba(255, 90, 79, 0.14); }
+.sf-zone-name { font: 700 7.6px var(--sf-font-head); fill: var(--sf-text); letter-spacing: 0.04em; pointer-events: none; }
+.sf-zone-cover { font: 6px var(--sf-font-mono); fill: var(--sf-dim); pointer-events: none; }
+.sf-zone.cover2 .sf-zone-cover { fill: var(--sf-ok); }
+.sf-zone.cover0 .sf-zone-cover { fill: var(--sf-warn); }
+.sf-zone-unknown { font: 700 16px var(--sf-font-mono); fill: var(--sf-crit); text-anchor: middle; opacity: 0.7; pointer-events: none; }
+.sf-token circle { stroke-width: 1.4; }
+.sf-token text { font: 700 6.5px var(--sf-font-mono); text-anchor: middle; pointer-events: none; fill: #fff; }
+.sf-token.ally circle { fill: rgba(79, 216, 255, 0.25); stroke: #4fd8ff; }
+.sf-token.ally.pc circle { fill: rgba(79, 216, 255, 0.6); stroke: #fff; }
+.sf-token.enemy circle { fill: rgba(255, 90, 79, 0.3); stroke: var(--sf-crit); cursor: crosshair; }
+.sf-token.targeted circle { stroke: #fff; stroke-width: 2.2; fill: rgba(255, 90, 79, 0.65); }
+.sf-token.down { opacity: 0.4; }
+.sf-token.hunker circle { stroke-dasharray: 2 1.5; }
+.sf-token-hpbg { fill: rgba(0, 0, 0, 0.7); }
+.sf-token-hp { fill: var(--sf-ok); }
+.sf-token.enemy .sf-token-hp { fill: var(--sf-crit); }
+.sf-field-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 5px 10px; font: 10px var(--sf-font-mono); color: var(--sf-dim); border-top: 1px solid var(--sf-line); }
+.sf-field-legend i { display: inline-block; width: 10px; height: 10px; margin-right: 4px; vertical-align: -1px; border-radius: 50%; border: 1.5px solid #4fd8ff; }
+.sf-field-legend .l-foe { border-color: var(--sf-crit); }
+.sf-field-legend .l-block { border-radius: 0; height: 0; border: 0; border-top: 2px dashed var(--sf-warn); vertical-align: 3px; }
+
+.sf-turn-bar { display: flex; align-items: center; gap: 6px; font: 12px var(--sf-font-mono); }
+.sf-turn-bar b { font: 700 12px var(--sf-font-head); letter-spacing: 0.14em; color: var(--sf-accent); }
+.sf-turn-bar > span:first-of-type { flex: 1; color: var(--sf-dim); }
+.sf-pipbox { padding: 2px 6px; border: 1px solid var(--sf-ok); color: var(--sf-ok); font-size: 10px; letter-spacing: 0.08em; }
+.sf-pipbox.used { border-color: var(--sf-line); color: var(--sf-dim); text-decoration: line-through; opacity: 0.6; }
+.sf-btn.wide { flex: 1 1 100%; }
+.sf-target { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--sf-line); background: rgba(0, 0, 0, 0.3); cursor: pointer; }
+.sf-target.sel { border-color: var(--sf-crit); background: rgba(255, 90, 79, 0.1); }
+.sf-target.unseen { opacity: 0.6; cursor: default; border-style: dashed; }
+.sf-chance { font: 18px var(--sf-font-mono); font-weight: 400; color: var(--sf-accent2); min-width: 48px; text-align: right; }
+.sf-cblog { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; font: 12.5px/1.4 var(--sf-font-mono); }
+.sf-cblog li { padding-left: 8px; border-left: 2px solid var(--sf-line); }
+.sf-cblog li.ally { border-left-color: #4fd8ff; }
+.sf-cblog li.enemy { border-left-color: var(--sf-crit); }
+.sf-cblog li.kill { border-left-color: var(--sf-warn); color: var(--sf-warn); }
+.sf-cblog li.say { border-left-color: transparent; font-style: italic; color: var(--sf-accent2); }
+.sf-cblog li.sys { color: var(--sf-dim); }
+
+.sf-body-wrap { display: grid; grid-template-columns: 96px 1fr; gap: 10px; align-items: center; }
+.sf-doll { width: 100%; }
+.sf-doll-part { cursor: pointer; stroke: rgba(0, 0, 0, 0.6); stroke-width: 1.2; transition: fill 0.2s; }
+.sf-doll-part.ok { fill: rgba(79, 224, 160, 0.55); }
+.sf-doll-part.warn { fill: rgba(255, 194, 74, 0.7); }
+.sf-doll-part.crit { fill: rgba(255, 90, 79, 0.8); }
+.sf-doll-part.dead { fill: #16181c; stroke: var(--sf-crit); stroke-dasharray: 2 2; }
+.sf-doll-part.sel { stroke: #fff; stroke-width: 2; }
+.sf-doll-part.bleeding { animation: sf-pulse 0.9s infinite; }
+.sf-part-list { display: flex; flex-direction: column; }
+.sf-part-row { display: grid; grid-template-columns: 1fr auto; column-gap: 8px; padding: 3px 6px; font-size: 12.5px; border-left: 3px solid var(--c, var(--sf-ok)); cursor: pointer; margin-bottom: 2px; background: rgba(0, 0, 0, 0.25); }
+.sf-part-row.warn { --c: var(--sf-warn); }
+.sf-part-row.crit, .sf-part-row.dead { --c: var(--sf-crit); }
+.sf-part-row.sel { background: rgba(var(--sf-accent-rgb), 0.14); }
+.sf-part-row b { font: 12.5px var(--sf-font-mono); font-weight: 400; }
+.sf-part-row em { grid-column: 1 / -1; font: 700 9.5px var(--sf-font-head); font-style: normal; letter-spacing: 0.1em; color: var(--sf-crit); }
+.sf-part-row i { font-size: 9px; color: var(--sf-info); }
+.sf-route-bar.transit { border-color: var(--sf-accent); background: rgba(var(--sf-accent-rgb), 0.08); }
+.sf-route-bar .sf-xp { display: block; margin-top: 6px; height: 3px; }
+.sf-ship-marker path { fill: var(--sf-accent2); }

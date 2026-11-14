@@ -14,14 +14,18 @@ https://github.com/Sronefa/silly-extension-sci-fi
 
 ## Status
 
-The framework and the character system are in. Tactical combat, ship and mech combat, the economy and the fail-state rules are being designed and are added as modules on top.
+The framework, the character system, the time system and on-foot tactical combat are in. Ship and mech combat, the economy and the fail-state rules are being designed and are added as modules on top.
 
 What works today:
 
 - **Character creator**: 8 origins, 15 careers at three experience tiers, six attributes, sixteen skills, point-buy, traits, flaws and cyberware. The career decides whether you start with a ship, a mech or fighter, or nothing.
 - **Character sheet**: skills gain XP through use and through paid training at stations. Skill checks roll 2d10 + skill + attribute against a difficulty, with penalties for hunger, exhaustion, stress and wounds.
 - **Party**: AI characters in the chat can be given their own sheet with one tap.
-- **Death**: checkpoints or permadeath, chosen at creation. Reaching zero health means downed, not dead.
+- **Time**: nothing is skipped. A jump puts you in transit for its real duration and you live it: each AI reply moves the clock a few minutes, and eating, drinking, washing, unwinding and sleeping are actions that take time. The ship moves along its lane on the map and arrives on its own.
+- **Body and wounds**: seven body parts with their own hit points. Bleeding, arterial bleeds, fractures, burns and concussions, each treated with the right item (Dermal Patch, Hemoclamp, Bone-weld Splint, Burn Gel, Medkit, Nanite Injector, Field Surgery Kit and more). A destroyed head is death, a destroyed thorax leaves you down and dying.
+- **Armor**: classes 0 to 6 against weapon penetration, with durability. Civilian clothes stop nothing, a marine hardsuit stops most small arms until it wears out, and power armor has its own frame hit points.
+- **On-foot combat**: turn-based on a zone map with line of sight, cover, range bands and high ground. Each turn is a move, an action and a bonus action. You play only your own character; party members and enemies act on their own, with morale, retreats and surrenders. The AI starts a fight with `<sf>combat "Cargo bay" pirate 3</sf>` and narrates it once, from the after-action report, when it ends.
+- **Death**: checkpoints or permadeath, chosen at creation.
 - **Console (HUD)** with tabs: Status, Sheet, Ship, Nav, Gear, Dossier, Log. Full-screen sheet with bottom tabs on phones.
 - **Widgets**: on wide screens every panel can be popped out of the console and dragged anywhere. Positions are remembered.
 - **Campaign per chat**: state is stored in the chat's metadata, so each chat is its own save. Export and import as JSON.
@@ -44,6 +48,7 @@ Used by the AI inside `<sf>…</sf>`, by `/sf`, and by the console on the Log ta
 | `system <name>` | `system engines -25` |
 | `location`, `dock`, `undock`, `jump` | `jump "Casen Gate"` |
 | `cargo add/remove`, `item add/remove` | `cargo add "Medical Supplies" 4` |
+| `combat`, `wound`, `eat`, `drink`, `sleep`, `wash`, `relax` | `combat "Cargo bay" pirate 3`, `wound larm 20 bleed`, `sleep 6h` |
 | `injury add/heal` | `injury add "Fractured rib" moderate` |
 | `rep`, `contact` | `rep "Sol Accord" +5` |
 | `mission add/done/fail/drop` | `mission add "Deliver medicine" reward 4000` |

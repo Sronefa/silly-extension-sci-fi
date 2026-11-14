@@ -1,6 +1,8 @@
 // Character sheets: the same structure is used for the player and for every party member.
 import { uid, clamp, norm } from '../core/util.js';
-import { NEEDS, ARMORS } from '../data/catalog.js';
+import { NEEDS } from '../data/catalog.js';
+import { ARMOR } from '../data/combat.js';
+import { ensureBody, ensureArmor, bodyPenalty } from './body.js';
 import {
     ATTRIBUTES, SKILL_DEFS, SKILL_IDS, skillDef, ORIGINS, CAREERS, TIERS, TRAITS, FLAWS, CYBERWARE,
     MAX_FLAW_POINTS, DIFFICULTIES,
@@ -34,21 +36,21 @@ const mulFx = (sheet, pick) => effects(sheet).reduce((n, fx) => n * (pick(fx) ??
 export const attrOf = (sheet, id) => (sheet.attrs?.[id] ?? ATTR_BASE) + sumFx(sheet, fx => fx.attr?.[id]);
 export const skillOf = (sheet, id) => clamp((sheet.skills?.[id] ?? 0) + sumFx(sheet, fx => fx.skill?.[id]), 0, SKILL_MAX + 3);
 export const skillBonus = (sheet, id) => sumFx(sheet, fx => fx.skill?.[id]);
-export const calcMaxHealth = (sheet) => Math.max(20, 50 + attrOf(sheet, 'end') * 8 + sumFx(sheet, fx => fx.maxHealth));
+/** Total health across all body parts. Endurance and traits scale the whole body. */
+export const calcMaxHealth = (sheet) => Math.max(120, 250 + attrOf(sheet, 'end') * 25 + sumFx(sheet, fx => fx.maxHealth) * 3);
 export const decayMult = (sheet, need) => mulFx(sheet, fx => fx.decay?.[need]);
 export const stressMult = (sheet) => mulFx(sheet, fx => fx.stressGain);
 export const xpMult = (sheet) => mulFx(sheet, fx => fx.xp);
-export const armorOf = (sheet) => (ARMORS[sheet.armor]?.armor ?? 0) + sumFx(sheet, fx => fx.armor);
+export const armorOf = (sheet) => (ARMOR[sheet.armor]?.cls ?? 0);
+/** Flat damage reduction from subdermal plating and similar. */
+export const plating = (sheet) => sumFx(sheet, fx => fx.armor);
 export const hasFx = (sheet, key) => effects(sheet).some(fx => fx[key]);
 export const cyberCapacity = (sheet) => Math.max(0, Math.floor((attrOf(sheet, 'end') + 2) * mulFx(sheet, fx => fx.cyberCap)));
 export const cyberLoad = (sheet) => (sheet.cyber ?? []).reduce((n, id) => n + (byId(CYBERWARE, id)?.load ?? 0), 0);
 
 export function refreshDerived(sheet) {
-    const before = sheet.maxHealth ?? 0;
-    sheet.maxHealth = calcMaxHealth(sheet);
-    if (sheet.health === undefined) sheet.health = sheet.maxHealth;
-    else if (sheet.maxHealth > before && before > 0) sheet.health += sheet.maxHealth - before;
-    sheet.health = clamp(sheet.health, 0, sheet.maxHealth);
+    ensureBody(sheet, calcMaxHealth(sheet));
+    ensureArmor(sheet);
     return sheet;
 }
 
@@ -195,14 +197,13 @@ export function buildSheetFromDraft(d) {
         if (it) it.qty++;
         else sheet.inventory.push({ id: uid('it'), name, qty: 1 });
     };
-    for (const g of ['Ration Pack', 'Ration Pack', 'Water Flask', ...(c.gear ?? [])]) stack(g);
+    for (const g of ['Ration Pack', 'Ration Pack', 'Water Flask', 'Water Flask', 'Dermal Patch', 'Magazine', ...(c.gear ?? [])]) stack(g);
     for (const fx of effects(sheet)) {
         if (fx.credits) sheet.credits += fx.credits;
         if (fx.debt) sheet.debt += fx.debt;
         if (fx.injury) sheet.injuries.push({ id: uid('inj'), name: fx.injury, severity: 'moderate', permanent: true, since: 0 });
     }
     refreshDerived(sheet);
-    sheet.health = sheet.maxHealth;
     return sheet;
 }
 
@@ -264,7 +265,7 @@ export function gainXp(sheet, skillId, amount) {
 }
 
 /** Penalty to all checks from hunger, exhaustion, stress and wounds. Returns { total, parts }. */
-export function conditionPenalty(sheet) {
+export function conditionPenalty(sheet, now = 0) {
     const parts = [];
     let needs = 0;
     for (const n of NEEDS) {
@@ -280,21 +281,23 @@ export function conditionPenalty(sheet) {
     let wounds = 0;
     for (const i of sheet.injuries ?? []) wounds += { minor: 0, moderate: 1, severe: 2, critical: 3 }[i.severity] ?? 0;
     wounds = Math.min(wounds, 4);
-    if (wounds) parts.push(`wounds -${wounds}`);
-    return { total: needs + stress + wounds, parts };
+    if (wounds) parts.push(`injuries -${wounds}`);
+    const body = bodyPenalty(sheet, now);
+    parts.push(...body.parts.filter(p => !p.includes('attacks')));
+    return { total: needs + stress + wounds + body.all, parts, attack: body.attack, legs: body.legs };
 }
 
 /**
  * The core roll of the game: 2d10 + skill + attribute modifier - condition penalties, against a difficulty.
  * Two dice give a bell curve, so skill matters more than luck. Double 10 is a critical, double 1 a fumble.
  */
-export function skillCheck(sheet, skillId, dc, { mod = 0 } = {}) {
+export function skillCheck(sheet, skillId, dc, { mod = 0, now = 0 } = {}) {
     const def = skillDef(skillId);
     if (!def) throw new Error(`unknown skill "${skillId}"`);
     const d1 = 1 + Math.floor(Math.random() * 10), d2 = 1 + Math.floor(Math.random() * 10);
     const skill = skillOf(sheet, skillId);
     const attrMod = attrOf(sheet, def.attr) - 5;
-    const pen = conditionPenalty(sheet);
+    const pen = conditionPenalty(sheet, now);
     const untrained = skill === 0 ? -2 : 0;
     const bonus = skill + attrMod + untrained - pen.total + mod;
     const total = d1 + d2 + bonus;

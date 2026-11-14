@@ -7,6 +7,7 @@ import { toast, toInput } from '../core/st.js';
 import { NEEDS, SHIP_SYSTEMS, SHIP_WEAPONS, FACTIONS } from '../data/catalog.js';
 import { CRAFT_CLASSES } from '../data/chargen.js';
 import { hasFx } from '../systems/character.js';
+import { isDown } from '../systems/body.js';
 import { factionById, SECURITY_LABELS } from '../systems/galaxy.js';
 import { blip } from './sfx.js';
 
@@ -78,7 +79,7 @@ function defineWidgets() {
             const cap = st.captain;
             const statuses = needStatuses(st);
             const injuries = cap.injuries.map(i => `<li class="sf-row"><span class="sf-sev ${i.severity}">${esc(i.severity)}</span><span class="sf-grow">${esc(i.name)}</span>${btn('injury-heal', '', { icon: 'fa-check', cls: 'ghost', data: { name: i.name }, title: 'Mark healed' })}</li>`).join('');
-            return `${cap.health <= 0 ? `<div class="sf-downed"><b>DOWNED</b><span>Unconscious and dying. Someone has to stabilise you.</span>
+            return `${isDown(cap) ? `<div class="sf-downed"><b>DOWNED</b><span>Unconscious and dying. Someone has to stabilise you.</span>
                 <div class="sf-actions">${btn('vitals-stable', 'Stabilised', { icon: 'fa-heart-pulse', cls: 'primary' })}${btn('vitals-die', 'Died', { icon: 'fa-skull' })}</div></div>` : ''}
             ${gauge('Health', cap.health, cap.maxHealth, { edit: 'health' })}
             ${gauge('Stress', cap.stress, 100, { invert: true, edit: 'stress', text: `${Math.round(cap.stress)}%` })}
@@ -90,11 +91,11 @@ function defineWidgets() {
         },
     });
     registerWidget({
-        id: 'clock', title: () => 'Ship time',
+        id: 'clock', title: () => 'Clock',
         render: (st) => `<div class="sf-clock">${esc(fmtDate(st.minutes))}</div><div class="sf-actions">
+            ${btn('run', '+10 min', { icon: 'fa-clock', data: { cmd: 'time +10m' } })}
+            ${btn('run', '+30 min', { icon: 'fa-clock', data: { cmd: 'time +30m' } })}
             ${btn('run', '+1 h', { icon: 'fa-clock', data: { cmd: 'time +1h' } })}
-            ${btn('run', '+8 h', { icon: 'fa-clock', data: { cmd: 'time +8h' } })}
-            ${btn('run', '+1 day', { icon: 'fa-clock', data: { cmd: 'time +1d' } })}
             ${btn('edit', 'Custom', { icon: 'fa-pen', data: { cmd: 'time', label: 'Advance time (e.g. +3h, +45m, +2d)' } })}
         </div>`,
     });
@@ -172,7 +173,7 @@ function defineWidgets() {
 
 export function initCoreTabs() {
     defineWidgets();
-    registerTab({ id: 'status', label: 'Status', icon: 'fa-gauge-high', order: 10, widgets: ['position', 'vitals', 'party', 'clock', 'checkpoints'] });
+    registerTab({ id: 'status', label: 'Status', icon: 'fa-gauge-high', order: 10, widgets: ['position', 'vitals', 'body', 'activities', 'party', 'clock', 'checkpoints', 'encounter'] });
     registerTab({ id: 'ship', label: 'Ship', icon: 'fa-rocket', order: 16, widgets: ['ship', 'systems', 'hangar', 'noship'] });
     registerTab({ id: 'gear', label: 'Gear', icon: 'fa-boxes-stacked', order: 30, widgets: ['account', 'loadout', 'gear', 'cargo'] });
     registerTab({ id: 'dossier', label: 'Dossier', icon: 'fa-id-card', order: 40, widgets: ['missions', 'factions', 'contacts', 'trackers'], badge: (st) => st.missions.filter(m => m.status === 'active').length || '' });

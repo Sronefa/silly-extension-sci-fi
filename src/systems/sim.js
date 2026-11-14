@@ -5,6 +5,8 @@ import { clamp, findByName, uid, norm } from '../core/util.js';
 import { NEEDS, COMMODITIES, SHIP_SYSTEMS, FACTIONS, INJURY_SEVERITY } from '../data/catalog.js';
 import { ATTRIBUTES, SKILL_DEFS, CYBERWARE, CHECK_DCS } from '../data/chargen.js';
 import { decayMult, stressMult, hasFx, gainXp, skillCheck, describeCheck, refreshDerived, makeNpcSheet, cyberLoad, cyberCapacity } from './character.js';
+import { damagePart, healBody, woundTick, naturalHeal, isDead, isDown, isBleeding, randomPart, addWound, syncHealth, countItem } from './body.js';
+import { BODY_PARTS, WOUND_TYPES } from '../data/combat.js';
 
 function needShip(st) {
     if (!st.ship) throw new Error('you have no ship');
@@ -29,40 +31,95 @@ export function killPlayer(cause = '') {
     if (!st || st.dead) return;
     st.dead = true;
     st.deathCause = cause;
-    st.captain.health = 0;
+    st.combat = null;
     addLog(`${st.captain.name} has died${cause ? `: ${cause}` : ''}.`, 'combat');
 }
 
-/** Advances the campaign clock and everything that depends on it. */
-export function advanceTime(minutes, { routine = false } = {}) {
+const arrivalHooks = [];
+/** Feature modules can react to arrivals (encounters, market refresh, wages…). */
+export function onArrival(fn) { arrivalHooks.push(fn); }
+
+/**
+ * Advances the campaign clock and everything that depends on it: needs, wounds, healing,
+ * supplies and travel. There are no time skips: this is the only way time moves.
+ */
+export function advanceTime(minutes, { asleep = false } = {}) {
     const st = S();
     if (!st || !Number.isFinite(minutes) || minutes === 0) return;
     const before = st.minutes;
     st.minutes = Math.max(0, st.minutes + Math.round(minutes));
-    const hours = (st.minutes - before) / 60;
+    const mins = st.minutes - before;
+    const hours = mins / 60;
     if (hours <= 0) return;
     const cfg = settings();
-    // Routine time (a long transit with food and a bunk available) keeps the body ticking over
-    // instead of draining it: you eat, drink, wash and sleep as part of the trip.
-    const provided = routine && (!st.ship || st.ship.supplies > 0);
-    if (cfg.needsDecay && provided) {
-        for (const id of ['nourishment', 'hydration', 'rest', 'hygiene']) {
-            const cur = st.captain.needs[id];
-            st.captain.needs[id] = cur < 75 ? Math.min(75, cur + 6 * hours) : Math.max(75, cur - 1 * hours);
-        }
-        adjust(st.captain.needs, 'morale', -0.5 * hours * cfg.needsRate * decayMult(st.captain, 'morale'), 0, 100);
-        if (hasFx(st.captain, 'craving')) adjust(st.captain, 'craving', 2.5 * hours * cfg.needsRate, 0, 100);
-    } else if (cfg.needsDecay) {
+    const pc = st.captain;
+    if (cfg.needsDecay) {
+        const rate = hours * cfg.needsRate;
         for (const n of NEEDS) {
-            adjust(st.captain.needs, n.id, -n.decay * hours * cfg.needsRate * decayMult(st.captain, n.id), 0, 100);
+            let mult = decayMult(pc, n.id);
+            if (asleep) mult *= n.id === 'rest' ? 0 : n.id === 'morale' ? 0 : 0.6;
+            adjust(pc.needs, n.id, -n.decay * rate * mult, 0, 100);
         }
-        if (hasFx(st.captain, 'craving')) adjust(st.captain, 'craving', 2.5 * hours * cfg.needsRate, 0, 100);
+        if (asleep) adjust(pc.needs, 'rest', 12.5 * hours, 0, 100);
+        if (hasFx(pc, 'craving')) adjust(pc, 'craving', 2.5 * rate, 0, 100);
+        // Running on empty hurts: the body starts to fail and nerves fray.
+        if (pc.needs.hydration <= 0) damagePart(pc, 'thorax', 3 * rate);
+        if (pc.needs.nourishment <= 0) damagePart(pc, 'stomach', 1 * rate);
+        if (pc.needs.rest <= 0) adjust(pc, 'stress', 4 * rate * stressMult(pc), 0, 100);
     }
+    // Wounds bleed in story time too, and rested, fed bodies slowly mend.
+    for (const sh of [pc, ...st.crew]) {
+        woundTick(sh, { minutes: mins });
+        const fed = sh !== pc || (pc.needs.nourishment > 25 && pc.needs.hydration > 25);
+        if (fed) naturalHeal(sh, hours, (asleep ? 2 : 1) * (hasFx(sh, 'healing') ? 1.5 : 1));
+    }
+    if (isDead(pc) || pc.health <= 0) killPlayer(isBleeding(pc) ? 'bled out' : 'succumbed to their condition');
     // Ship stores: one crew-day of supplies per person per day.
     if (st.ship) {
         const people = 1 + st.crew.length;
         st.ship.supplies = Math.max(0, st.ship.supplies - (people * hours) / 24);
     }
+    if (st.transit && st.minutes >= st.transit.end) completeTransit();
+}
+
+/** Starts a journey to another system. The trip is lived in story time; nothing is skipped. */
+export function beginTransit(toId, hours, info = {}) {
+    const st = S();
+    st.transit = { from: st.loc.system, to: toId, start: st.minutes, end: st.minutes + Math.round(hours * 60), ...info };
+    st.loc.docked = false;
+    st.loc.place = '';
+}
+
+function completeTransit() {
+    const st = S();
+    const g = galaxy();
+    const t = st.transit;
+    const from = g.systems[t.from], to = g.systems[t.to];
+    st.transit = null;
+    st.loc = { system: to.id, station: 0, docked: !!t.passenger, place: '' };
+    st.visited[to.id] = true;
+    if (st.route[0] === t.from) st.route = st.route.slice(1);
+    if (st.route.length < 2) st.route = [];
+    addLog(t.passenger ? `Arrived at ${to.stations[0].name}, ${to.name}.` : `Jump complete: arrived in ${to.name}.`, 'nav');
+    st.pendingEvent = `${t.passenger ? `The transport carrying ${st.captain.name}` : `The ${st.ship?.name ?? 'ship'}`} has just dropped out of jump and arrived in the ${to.name} system after the journey from ${from.name}. Describe the arrival.`;
+    saveCheckpoint(`Arrival: ${to.name}`, true);
+    for (const fn of arrivalHooks) {
+        try { fn(st, from, to); } catch (e) { console.error('[Ship-OS] arrival hook failed', e); }
+    }
+}
+
+export function transitInfo(st = S()) {
+    const t = st?.transit;
+    if (!t) return null;
+    const g = galaxy();
+    const total = Math.max(1, t.end - t.start);
+    return { ...t, fromSys: g.systems[t.from], toSys: g.systems[t.to], left: Math.max(0, t.end - st.minutes), progress: clamp((st.minutes - t.start) / total, 0, 1) };
+}
+
+export function fmtDuration(mins) {
+    const m = Math.max(0, Math.round(mins));
+    const d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60), r = m % 60;
+    return [d ? `${d} d` : '', h ? `${h} h` : '', !d && r ? `${r} min` : ''].filter(Boolean).join(' ') || '0 min';
 }
 
 export function parseDuration(text) {
@@ -136,8 +193,83 @@ const COMMANDS = {
         // "health -10" hits the player; "health "Ito" -10" hits a party member.
         const target = args.length > 1 ? who(st, args[0]) : st.captain;
         if (!target) throw new Error(`nobody called "${args[0]}"`);
-        const out = applyDelta(target, 'health', args[args.length - 1], 0, target.maxHealth);
-        return `${target === st.captain ? 'Health' : `${target.name} health`} ${out}${target.health <= 0 ? ' (DOWN)' : ''}`;
+        const d = parseDelta(args[args.length - 1]);
+        if (!d) throw new Error(`"${args[args.length - 1]}" is not a number`);
+        const before = target.health;
+        const change = d.set ? d.v - before : d.v;
+        if (change < 0) {
+            // Unspecified harm lands on a random body part; large amounts are split over several.
+            let left = -change;
+            while (left > 0) { const hit = Math.min(left, 30); damagePart(target, randomPart(), hit); left -= hit; }
+        } else if (change > 0) {
+            healBody(target, change);
+        }
+        const diff = Math.round(target.health - before);
+        return `${target === st.captain ? 'Health' : `${target.name} health`} ${diff >= 0 ? '+' : ''}${diff}${isDown(target) ? ' (DOWN)' : ''}`;
+    },
+    wound(st, args) {
+        // wound ["Name"] <part> <damage> [bleed|arterial|fracture|burn|concussion]
+        const first = BODY_PARTS.find(p => p.id === norm(args[0]) || norm(p.name) === norm(args[0]) || norm(p.name).replace(' ', '') === norm(args[0]));
+        const target = first ? st.captain : who(st, args[0]);
+        if (!target) throw new Error(`nobody called "${args[0]}"`);
+        const rest = first ? args : args.slice(1);
+        const def = first ?? BODY_PARTS.find(p => p.id === norm(rest[0]) || norm(p.name).startsWith(norm(rest[0])) || norm(rest[0]).includes(p.id));
+        if (!def) throw new Error(`unknown body part "${rest[0]}" (head, thorax, abdomen, left/right arm, left/right leg)`);
+        const dmg = Math.abs(Number(rest[1])) || 0;
+        if (dmg) damagePart(target, def.id, dmg);
+        const added = [];
+        for (const tok of rest.slice(2)) {
+            const type = Object.keys(WOUND_TYPES).find(k => k.startsWith(norm(tok)) || norm(WOUND_TYPES[k].name).startsWith(norm(tok)));
+            if (type && addWound(target, def.id, type)) added.push(WOUND_TYPES[type].name.toLowerCase());
+        }
+        syncHealth(target);
+        return `${target === st.captain ? '' : `${target.name}: `}${def.name} -${dmg}${added.length ? ` (${added.join(', ')})` : ''}${isDown(target) ? ' (DOWN)' : ''}`;
+    },
+    eat(st) {
+        const pc = st.captain;
+        const food = pc.inventory.find(i => /ration|meal|food/i.test(i.name) && i.qty > 0);
+        if (food) { food.qty--; if (food.qty <= 0) pc.inventory.splice(pc.inventory.indexOf(food), 1); }
+        else if (st.ship && st.ship.supplies >= 0.34 && !st.loc.docked) st.ship.supplies -= 0.34;
+        else if (st.ship && st.ship.supplies >= 0.34) st.ship.supplies -= 0.34;
+        else if (st.transit?.passenger) { /* meals are part of the fare */ }
+        else throw new Error('nothing to eat: no rations and no ship stores');
+        advanceTime(15);
+        adjust(pc.needs, 'nourishment', 45, 0, 100);
+        return `Ate a meal (${food ? food.name : st.transit?.passenger ? 'galley' : 'ship stores'})`;
+    },
+    drink(st) {
+        const pc = st.captain;
+        const water = pc.inventory.find(i => /water|flask|drink|canteen/i.test(i.name) && i.qty > 0);
+        if (st.ship && st.ship.supplies > 0.05) st.ship.supplies -= 0.05;
+        else if (st.transit?.passenger || st.loc.docked) { /* taps on a station or transport */ }
+        else if (water) { water.qty--; if (water.qty <= 0) pc.inventory.splice(pc.inventory.indexOf(water), 1); }
+        else throw new Error('nothing to drink');
+        advanceTime(5);
+        adjust(pc.needs, 'hydration', 50, 0, 100);
+        return 'Drank';
+    },
+    sleep(st, [v = '8h']) {
+        if (st.combat) throw new Error('not during a fight');
+        const mins = clamp(parseDuration(v), 10, 12 * 60);
+        if (!Number.isFinite(mins)) throw new Error(`"${v}" is not a duration`);
+        advanceTime(mins, { asleep: true });
+        adjust(st.captain, 'stress', -mins / 30, 0, 100);
+        return `Slept ${fmtDuration(mins)}`;
+    },
+    wash(st) {
+        if (!st.ship && !st.loc.docked && !st.transit) throw new Error('nowhere to wash here');
+        advanceTime(20);
+        adjust(st.captain.needs, 'hygiene', 85, 0, 100);
+        adjust(st.captain.needs, 'morale', 3, 0, 100);
+        return 'Washed';
+    },
+    relax(st, [v = '1h']) {
+        if (st.combat) throw new Error('not during a fight');
+        const mins = clamp(parseDuration(v), 10, 6 * 60);
+        advanceTime(mins);
+        adjust(st.captain, 'stress', -(mins / 60) * 12, 0, 100);
+        adjust(st.captain.needs, 'morale', (mins / 60) * 6, 0, 100);
+        return `Unwound for ${fmtDuration(mins)}`;
     },
     stress(st, [v]) {
         const d = parseDelta(v);
@@ -233,6 +365,7 @@ const COMMANDS = {
         return `Location: ${place || 'cleared'}`;
     },
     dock(st, [name]) {
+        if (st.transit) throw new Error('cannot dock while in jump transit');
         const sys = galaxy().systems[st.loc.system];
         const i = name ? sys.stations.findIndex(s => norm(s.name).includes(norm(name))) : 0;
         st.loc.station = i >= 0 ? i : 0;
@@ -248,6 +381,7 @@ const COMMANDS = {
     jump(st, [name]) {
         const sys = findByName(galaxy().systems, name);
         if (!sys) throw new Error(`unknown star system "${name}"`);
+        st.transit = null;
         st.loc = { system: sys.id, station: 0, docked: false, place: '' };
         st.visited[sys.id] = true;
         st.route = [];
@@ -370,7 +504,7 @@ const ALIASES = {
     needs: 'need', loc: 'location', place: 'location',
     inventory: 'item', items: 'item', quest: 'mission', party: 'crew', companion: 'crew', death: 'die', save: 'checkpoint', roll: 'check', implant: 'cyber', attribute: 'attr', missions: 'mission',
     reputation: 'rep', faction: 'rep', damage: 'system', subsystem: 'system',
-    arrive: 'jump', travel: 'jump', track: 'tracker', supply: 'supplies',
+    arrive: 'jump', travel: 'jump', nap: 'sleep', shower: 'wash', injure: 'wound', track: 'tracker', supply: 'supplies',
 };
 // Needs can be addressed directly: "rest +30", "morale -10".
 for (const n of NEEDS) {
@@ -379,7 +513,6 @@ for (const n of NEEDS) {
 ALIASES.hunger = 'nourishment';
 ALIASES.food = 'nourishment';
 ALIASES.thirst = 'hydration';
-ALIASES.sleep = 'rest';
 ALIASES.fatigue = 'rest';
 
 export function registerCommand(name, handler, aliases = []) {
@@ -432,7 +565,8 @@ export function needStatuses(st = S()) {
         if (v <= 15) out.push(n.crit);
         else if (v <= 35) out.push(n.low);
     }
-    if (st.captain.health <= 0) out.unshift('DOWNED');
+    if (isDown(st.captain)) out.unshift('DOWNED');
+    else if (isBleeding(st.captain)) out.unshift('bleeding');
     if ((st.captain.craving ?? 0) >= 70) out.push('craving');
     if (st.captain.stress >= 80) out.push('breaking point');
     else if (st.captain.stress >= 55) out.push('stressed');

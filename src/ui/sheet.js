@@ -10,6 +10,7 @@ import {
     conditionPenalty, hasFx, makeNpcSheet, refreshDerived, SKILL_MAX,
 } from '../systems/character.js';
 import { runCommand, advanceTime, killPlayer } from '../systems/sim.js';
+import { syncHealth, isDown } from '../systems/body.js';
 import { blip } from './sfx.js';
 
 const expanded = new Set();
@@ -59,7 +60,7 @@ function tagList(list, ids, cls) {
 function partyRow(st, c) {
     const open = expanded.has(c.id);
     const best = SKILL_DEFS.map(d => ({ d, v: skillOf(c, d.id) })).filter(x => x.v > 0).sort((a, b) => b.v - a.v).slice(0, 3);
-    return `<div class="sf-member${c.health <= 0 ? ' down' : ''}">
+    return `<div class="sf-member${isDown(c) ? ' down' : ''}">
         <div class="sf-row">
             <span class="sf-grow"><b>${esc(c.name)}</b> <span class="sf-dim">${esc(c.role)}</span><br>
                 <small class="sf-dim">${best.map(x => `${esc(x.d.name)} ${x.v}`).join(' · ') || 'No trained skills'}</small></span>
@@ -71,7 +72,7 @@ function partyRow(st, c) {
             ${attrGrid(c, false)}
             ${skillRows(c, { all: false })}
             <div class="sf-kv"><span>Weapon</span><b>${esc(PERSONAL_WEAPONS[c.weapon]?.name ?? c.weapon)}</b></div>
-            <div class="sf-kv"><span>Armor</span><b>${esc(ARMORS[c.armor]?.name ?? c.armor)} (${armorOf(c)})</b></div>
+            <div class="sf-kv"><span>Armor</span><b>${esc(ARMORS[c.armor]?.name ?? c.armor)} (class ${armorOf(c)})</b></div>
             ${c.notes ? `<div class="sf-note">${esc(c.notes)}</div>` : ''}
             <div class="sf-actions">
                 ${btn('member-skill', 'Set skill', { icon: 'fa-pen', data: { id: c.id } })}
@@ -132,8 +133,8 @@ export function initSheet(wizardApi) {
             return `<div class="sf-loc-main">${esc(c.role)}</div>
             <div class="sf-loc-sub">${o ? esc(o.name) : ''}${c.look ? ` · ${esc(c.look)}` : ''}</div>
             ${attrGrid(c, true)}
-            <div class="sf-kv"><span>Max health</span><b>${c.maxHealth}</b></div>
-            <div class="sf-kv"><span>Personal armor</span><b>${armorOf(c)}</b></div>
+            <div class="sf-kv"><span>Total health</span><b>${c.maxHealth}</b></div>
+            <div class="sf-kv"><span>Armor class</span><b>${armorOf(c)}</b></div>
             <div class="sf-kv"><span>Death rule</span><b>${st.deathMode === 'ironman' ? 'Permadeath' : 'Checkpoints'}</b></div>
             <div class="sf-actions">${btn('sheet-look', 'Appearance', { icon: 'fa-pen' })}</div>`;
         },
@@ -182,8 +183,8 @@ export function initSheet(wizardApi) {
     registerWidget({
         id: 'loadout', title: () => 'Loadout', render(st) {
             const c = st.captain;
-            return `<label class="sf-field"><span>Weapon</span><select class="sf-input" data-sf-change="loadout" data-slot="weapon">${Object.values(PERSONAL_WEAPONS).map(w => `<option value="${w.id}"${w.id === c.weapon ? ' selected' : ''}>${esc(w.name)} (${w.dmg[0]}-${w.dmg[1]})</option>`).join('')}</select></label>
-            <label class="sf-field"><span>Armor</span><select class="sf-input" data-sf-change="loadout" data-slot="armor">${Object.values(ARMORS).map(a => `<option value="${a.id}"${a.id === c.armor ? ' selected' : ''}>${esc(a.name)} (${a.armor})</option>`).join('')}</select></label>`;
+            return `<label class="sf-field"><span>Weapon</span><select class="sf-input" data-sf-change="loadout" data-slot="weapon">${Object.values(PERSONAL_WEAPONS).filter(w => w.id !== 'claws').map(w => `<option value="${w.id}"${w.id === c.weapon ? ' selected' : ''}>${esc(w.name)} (${w.dmg[0]}-${w.dmg[1]}, pen ${w.pen})</option>`).join('')}</select></label>
+            <label class="sf-field"><span>Armor</span><select class="sf-input" data-sf-change="loadout" data-slot="armor">${Object.values(ARMORS).map(a => `<option value="${a.id}"${a.id === c.armor ? ' selected' : ''}>${esc(a.name)} (class ${a.cls}${a.frame ? `, frame ${a.frame}` : ''})</option>`).join('')}</select></label>`;
         },
     });
     registerWidget({
@@ -244,6 +245,7 @@ export function initSheet(wizardApi) {
         loadout(el) {
             const st = S();
             st.captain[el.dataset.slot] = el.value;
+            refreshDerived(st.captain);
             commit('ui');
         },
         'member-toggle'(el) {
@@ -300,7 +302,18 @@ export function initSheet(wizardApi) {
             if (loadCheckpoint(el.dataset.id)) toast('success', 'Checkpoint loaded.');
         },
         'cp-delete'(el) { deleteCheckpoint(el.dataset.id); },
-        'vitals-stable'() { exec('health 1'); },
+        'vitals-stable'() {
+            const st = S();
+            const pc = st.captain;
+            for (const id of ['head', 'thorax']) {
+                const p = pc.body.parts[id];
+                if (p.hp <= 0) p.hp = Math.max(1, Math.round(p.max * 0.15));
+            }
+            for (const p of Object.values(pc.body.parts)) p.w = p.w.filter(w => w !== 'bleed' && w !== 'hemorrhage');
+            syncHealth(pc);
+            addLog(`${pc.name} was stabilised.`, 'sys');
+            commit('ui');
+        },
         async 'vitals-die'() {
             const cause = await ask('Cause of death', '');
             if (cause === null || cause === undefined || cause === false) return;
@@ -312,7 +325,8 @@ export function initSheet(wizardApi) {
             const st = S();
             st.dead = false;
             st.deathCause = '';
-            st.captain.health = 1;
+            for (const p of Object.values(st.captain.body.parts)) { if (p.hp <= 0) p.hp = Math.max(1, Math.round(p.max * 0.15)); p.w = p.w.filter(w => w !== 'bleed' && w !== 'hemorrhage'); }
+            syncHealth(st.captain);
             addLog(`${st.captain.name} was pulled back from the brink.`, 'sys');
             commit('ui');
         },
@@ -326,9 +340,10 @@ export function initSheet(wizardApi) {
             c.injuries = c.injuries.filter(i => i.permanent);
             for (const k of Object.keys(c.needs)) c.needs[k] = 60;
             c.stress = 50;
+            c.body = null;
             refreshDerived(c);
-            c.health = c.maxHealth;
-            advanceTime(72 * 60);
+            st.minutes += 72 * 60;
+            st.transit = null;
             st.loc.docked = true;
             st.loc.place = '';
             addLog(`${c.name} decanted from cortex backup. Three days are missing.`, 'sys');

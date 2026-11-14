@@ -2,11 +2,13 @@
 // and hidden <sf>…</sf> update tags parsed out of AI replies.
 import { ctx, settings, MODULE, on } from './st.js';
 import { S, commit, snapshot, rollbackTo, fmtDate, locationLabel, cargoUsed, cargoCap, shipClass, currentSystem, galaxy, addLog } from './state.js';
-import { runBlock, needStatuses } from '../systems/sim.js';
+import { runBlock, needStatuses, transitInfo, fmtDuration, advanceTime } from '../systems/sim.js';
 import { fmtInt } from './util.js';
 import { NEEDS, SHIP_SYSTEMS, FACTIONS, SHIP_WEAPONS, PERSONAL_WEAPONS, ARMORS } from '../data/catalog.js';
 import { ATTRIBUTES, SKILL_DEFS, TRAITS, FLAWS, CYBERWARE, CRAFT_CLASSES } from '../data/chargen.js';
+import { ENEMIES } from '../data/combat.js';
 import { attrOf, skillOf, originOf, hasFx } from '../systems/character.js';
+import { describeBody, isDown } from '../systems/body.js';
 import { factionById, SECURITY_LABELS, systemDistance } from '../systems/galaxy.js';
 
 const TAG_RE = /<sf>([\s\S]*?)<\/sf>|\[sf\]([\s\S]*?)\[\/sf\]/gi;
@@ -29,6 +31,8 @@ export function buildTelemetry() {
     const L = [];
     L.push('[SHIP-OS TELEMETRY. This is the authoritative state of the story world. Keep the narration consistent with it and never contradict these numbers.]');
     L.push(`Date: ${fmtDate(st.minutes)} | Alert: ${st.alert.toUpperCase()}`);
+    const tr = transitInfo(st);
+    if (tr) L.push(`IN JUMP TRANSIT from ${tr.fromSys.name} to ${tr.toSys.name}: ${fmtDuration(tr.left)} of ship time remain. The journey is lived, never skipped: play out life aboard (conversation, meals, games, maintenance, sleep) and only advance the clock by what each scene actually covers.`);
     L.push(`Location: ${locationLabel(st)} (${fac.name} space, ${SECURITY_LABELS[sys.security].toLowerCase()} security, ${sys.star.label.toLowerCase()}${sys.hazard ? `, hazard: ${sys.hazard}` : ''})`);
 
     const needs = NEEDS.map(n => `${n.name} ${Math.round(cap.needs[n.id])}%`).join(', ');
@@ -41,7 +45,8 @@ export function buildTelemetry() {
     const traits = [...named(TRAITS, cap.traits), ...named(FLAWS, cap.flaws)];
     const cyber = named(CYBERWARE, cap.cyber);
     if (traits.length || cyber.length) L.push(`${traits.length ? `Traits and flaws: ${traits.join(', ')}. ` : ''}${cyber.length ? `Cyberware: ${cyber.join(', ')}.` : ''}`);
-    L.push(`Condition: Health ${Math.round(cap.health)}/${cap.maxHealth}${cap.health <= 0 ? ' (DOWNED, unconscious and dying without aid)' : ''}, Stress ${Math.round(cap.stress)}%.${inj} ${needs}.${hasFx(cap, 'craving') ? ` Craving ${Math.round(cap.craving)}%.` : ''}${statuses.length ? ` Status: ${statuses.join(', ')}.` : ''}`);
+    const body = describeBody(cap);
+    L.push(`Condition: Health ${Math.round(cap.health)}/${cap.maxHealth}${isDown(cap) ? ' (DOWNED, unconscious and dying without aid)' : ''}${body ? `. Wounds: ${body}` : ''}. Stress ${Math.round(cap.stress)}%.${inj} ${needs}.${hasFx(cap, 'craving') ? ` Craving ${Math.round(cap.craving)}%.` : ''}${statuses.length ? ` Status: ${statuses.join(', ')}.` : ''}`);
     L.push(`Armed with ${PERSONAL_WEAPONS[cap.weapon]?.name ?? cap.weapon}, wearing ${ARMORS[cap.armor]?.name ?? cap.armor}. Credits: ${fmtInt(cap.credits)} cr${cap.debt ? `, debt ${fmtInt(cap.debt)} cr` : ''}.`);
     if (cap.inventory.length) L.push(`Carried: ${cap.inventory.map(i => `${i.name} x${i.qty}`).join(', ')}`);
 
@@ -60,7 +65,7 @@ export function buildTelemetry() {
     if (st.crew.length) {
         L.push(`Party: ${st.crew.map(c => {
             const best = SKILL_DEFS.map(d => ({ d, v: skillOf(c, d.id) })).filter(x => x.v > 0).sort((x, y) => y.v - x.v).slice(0, 3).map(x => `${x.d.name} ${x.v}`);
-            return `${c.name} (${c.role}; health ${Math.round(c.health)}/${c.maxHealth}${c.health <= 0 ? ' DOWNED' : ''}${best.length ? `; ${best.join(', ')}` : ''}${c.injuries.length ? `; injured: ${c.injuries.map(i => i.name).join(', ')}` : ''})`;
+            return `${c.name} (${c.role}; health ${Math.round(c.health)}/${c.maxHealth}${isDown(c) ? ' DOWNED' : ''}${describeBody(c) ? `, wounds: ${describeBody(c)}` : ''}${best.length ? `; ${best.join(', ')}` : ''}${c.injuries.length ? `; injured: ${c.injuries.map(i => i.name).join(', ')}` : ''})`;
         }).join('; ')}`);
     }
     if (st.lastCheck) L.push(`LATEST SKILL CHECK (narrate this outcome, do not change it): ${st.lastCheck.text}`);
@@ -96,7 +101,9 @@ export function buildTelemetry() {
             + 'location "place"; dock "station"; undock; jump "star system"; cargo add|remove "name" N; item add|remove "name" N; '
             + 'injury add "name" minor|moderate|severe|critical; injury heal "name"; rep "faction" ±N; '
             + 'mission add "title" reward N; mission done|fail "title"; crew add|remove "name" "role"; contact "name" ±N; '
-            + 'tracker "name" ±N; alert green|yellow|red; log "entry"; die "cause" (only if the character is truly killed). Always advance time. Never mention the block in the narration.]');
+            + 'tracker "name" ±N; alert green|yellow|red; log "entry"; wound <head|thorax|abdomen|"left arm"|"right arm"|"left leg"|"right leg"> N [bleed|arterial|fracture|burn|concussion] for specific injuries outside of fights; die "cause" (only if the character is truly killed). '
+            + 'FIGHTS: when violence breaks out, do NOT narrate the fight. Stop at the instant it begins and add: combat "place" <enemy> <count> [<enemy> <count>...] [ambush|surprise]. Enemy types: ' + Object.keys(ENEMIES).join(', ') + ', or any quoted name. The game resolves the fight and gives you the result to narrate afterwards. '
+            + 'TIME: always include a time command for how long the scene took, usually minutes. Never skip ahead hours or days on your own. Never mention the block in the narration.]');
     }
     return L.join('\n');
 }
@@ -125,7 +132,13 @@ function processMessage(mesId) {
         commit('consumed');
     }
     TAG_RE.lastIndex = 0;
-    if (!cfg.aiCommands || !TAG_RE.test(msg.mes)) return;
+    const hasTags = cfg.aiCommands && TAG_RE.test(msg.mes);
+    // Every reply takes some story time. If the AI did not say how much, assume a short beat.
+    if (!(hasTags && /(^|[\n;>])\s*time\b/i.test(msg.mes)) && cfg.autoMinutes > 0 && !cur.combat && !cur.dead) {
+        advanceTime(Number(cfg.autoMinutes));
+        commit('auto-time');
+    }
+    if (!hasTags) return;
 
     const applied = [];
     const failed = [];

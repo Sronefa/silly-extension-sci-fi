@@ -6,6 +6,7 @@ import { initSlash } from './src/core/slash.js';
 import { initHud, redraw, setScreens, registerActions } from './src/ui/hud.js';
 import { initSheet } from './src/ui/sheet.js';
 import { wizardApi, wizardActions } from './src/ui/chargen.js';
+import { initCombatUi } from './src/ui/combat.js';
 import { initCoreTabs } from './src/ui/tabs.js';
 import { initMap } from './src/ui/map.js';
 import { initSettings, applyTheme } from './src/ui/settings.js';
@@ -24,6 +25,7 @@ function start() {
         const sheet = initSheet(wizardApi);
         setScreens(wizardApi, sheet.deathHtml);
         registerActions(wizardActions);
+        initCombatUi();
         initHud();
         initSettings();
         initSlash();

@@ -25,6 +25,8 @@ export const DEFAULT_SETTINGS = {
     needsDecay: true,
     needsRate: 1,
     encounters: true,
+    autoMinutes: 5,
+    combatSpeech: false,
     wages: true,
     // AI link
     inject: true,

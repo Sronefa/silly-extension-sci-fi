@@ -1,10 +1,11 @@
 // Navigation tab: pannable, zoomable sector map with route plotting and a system orbit view.
 import { registerTab, registerWidget, registerActions, btn, ask } from './hud.js';
-import { S, commit, addLog, galaxy, saveCheckpoint } from '../core/state.js';
-import { advanceTime } from '../systems/sim.js';
+import { S, commit, addLog, galaxy } from '../core/state.js';
+import { beginTransit, transitInfo, fmtDuration, onArrival } from '../systems/sim.js';
 import { esc, fmtInt, clamp } from '../core/util.js';
 import { toast } from '../core/st.js';
 import { ECONOMIES } from '../data/catalog.js';
+import { isDown } from '../systems/body.js';
 import { SECTOR_W, SECTOR_H, findRoute, factionById, SECURITY_LABELS, systemDistance } from '../systems/galaxy.js';
 import { blip } from './sfx.js';
 
@@ -12,9 +13,7 @@ let view = null;      // current viewBox { x, y, w, h }
 let selected = null;  // selected system id
 let mode = 'sector';  // 'sector' | 'system'
 
-const jumpHooks = [];
-/** Feature modules can react to arrivals (encounters, market refresh, wages…). */
-export function onJump(fn) { jumpHooks.push(fn); }
+export { onArrival as onJump };
 
 function resetView(st) {
     const sys = galaxy().systems[st.loc.system];
@@ -37,7 +36,7 @@ function sectorSvg(st) {
     }).join('');
     const halos = g.systems.map(s => `<circle cx="${s.x}" cy="${s.y}" r="8" fill="${factionById(s.faction).color}" class="sf-halo"/>`).join('');
     const stars = g.systems.map(s => {
-        const here = s.id === st.loc.system;
+        const here = s.id === st.loc.system && !st.transit;
         const sel = s.id === selected;
         return `<g class="sf-sys${here ? ' here' : ''}${sel ? ' sel' : ''}${st.visited[s.id] ? ' visited' : ''}" data-sf="map-select" data-sys="${s.id}">
             <circle cx="${s.x}" cy="${s.y}" r="4.5" class="sf-hit"/>
@@ -52,8 +51,17 @@ function sectorSvg(st) {
     for (let y = 0; y <= SECTOR_H; y += 10) grid.push(`<line class="sf-grid" x1="0" y1="${y}" x2="${SECTOR_W}" y2="${y}"/>`);
     return `<svg class="sf-map" viewBox="${view.x} ${view.y} ${view.w} ${view.h}" preserveAspectRatio="xMidYMid meet">
         <defs><filter id="sf-blur" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="3"/></filter></defs>
-        <g>${grid.join('')}</g><g filter="url(#sf-blur)">${halos}</g><g>${lanes}</g><g>${stars}</g>
+        <g>${grid.join('')}</g><g filter="url(#sf-blur)">${halos}</g><g>${lanes}</g><g>${stars}</g>${shipMarker(st)}
     </svg>`;
+}
+
+function shipMarker(st) {
+    const t = transitInfo(st);
+    if (!t) return '';
+    const x = t.fromSys.x + (t.toSys.x - t.fromSys.x) * t.progress;
+    const y = t.fromSys.y + (t.toSys.y - t.fromSys.y) * t.progress;
+    return `<line class="sf-lane route" x1="${t.fromSys.x}" y1="${t.fromSys.y}" x2="${t.toSys.x}" y2="${t.toSys.y}"/>
+        <g class="sf-ship-marker"><circle cx="${x}" cy="${y}" r="1.6" class="sf-here-ring"/><path d="M ${x} ${y - 1.1} L ${x + 0.8} ${y + 0.8} L ${x} ${y + 0.4} L ${x - 0.8} ${y + 0.8} Z"/></g>`;
 }
 
 function systemSvg(sys) {
@@ -97,13 +105,16 @@ function infoBody(st) {
         routeLine = `<div class="sf-kv"><span>Route</span><b>${route.path.length - 1} jump${route.path.length > 2 ? 's' : ''} · ${route.dist} ly · ${st.ship ? `${Math.round(fuel * 10) / 10} fuel` : `${fmtInt(fare)} cr fare`} · ${hours} h</b></div>`;
     }
     const stations = sys.stations.map((s, i) => `<li class="sf-row"><span class="sf-grow"><b>${esc(s.name)}</b><br><small class="sf-dim">Orbiting ${esc(s.orbiting)} · ${s.services.join(', ')}</small></span>
-        ${here && !(st.loc.docked && st.loc.station === i) ? btn('map-dock', 'Dock', { icon: 'fa-anchor', data: { idx: i } }) : ''}
+        ${here && !st.transit && !(st.loc.docked && st.loc.station === i) ? btn('map-dock', 'Dock', { icon: 'fa-anchor', data: { idx: i } }) : ''}
         ${here && st.loc.docked && st.loc.station === i ? '<span class="sf-tag">docked</span>' : ''}</li>`).join('');
     const bodies = sys.bodies.map(b => `<span class="sf-tag"><i style="background:${b.color}" class="sf-dot"></i>${esc(b.name.replace(sys.name, '').trim() || 'Belt')} ${esc(b.type)}</span>`).join('');
     const next = st.route.length > 1 ? g.systems[st.route[1]] : null;
     const nextCost = next ? jumpCost(st, st.loc.system, next.id) : null;
 
-    return `${next ? `<div class="sf-route-bar"><span><i class="fa-solid fa-route"></i> Course laid in: <b>${esc(g.systems[st.route[st.route.length - 1]].name)}</b> · next ${esc(next.name)} (${st.ship ? `${nextCost.fuel} fuel` : `${fmtInt(nextCost.fare)} cr`}, ${nextCost.hours} h)</span>
+    const tr = transitInfo(st);
+    return `${tr ? `<div class="sf-route-bar transit"><span><i class="fa-solid fa-forward-fast"></i> In jump transit to <b>${esc(tr.toSys.name)}</b> · ${esc(fmtDuration(tr.left))} remaining<br>
+        <span class="sf-xp"><span style="width:${Math.round(tr.progress * 100)}%"></span></span></span></div>` : ''}
+    ${next && !tr ? `<div class="sf-route-bar"><span><i class="fa-solid fa-route"></i> Course laid in: <b>${esc(g.systems[st.route[st.route.length - 1]].name)}</b> · next ${esc(next.name)} (${st.ship ? `${nextCost.fuel} fuel` : `${fmtInt(nextCost.fare)} cr`}, ${nextCost.hours} h)</span>
         ${st.ship
         ? btn('map-jump', 'Engage jump', { icon: 'fa-forward-fast', cls: 'primary', disabled: st.ship.fuel < nextCost.fuel })
         : btn('map-jump', 'Book passage', { icon: 'fa-ticket', cls: 'primary', disabled: st.captain.credits < nextCost.fare })}${btn('map-clear', '', { icon: 'fa-xmark', cls: 'ghost', title: 'Clear course' })}</div>` : ''}
@@ -116,7 +127,7 @@ function infoBody(st) {
         ${routeLine}
         ${st.sysNotes[id] ? `<div class="sf-note">${esc(st.sysNotes[id])}</div>` : ''}
         <div class="sf-actions">
-            ${!here && route ? btn('map-plot', 'Plot course', { icon: 'fa-route', cls: 'primary' }) : ''}
+            ${!here && route && !st.transit ? btn('map-plot', 'Plot course', { icon: 'fa-route', cls: 'primary' }) : ''}
             ${btn('map-mode', mode === 'sector' ? 'System view' : 'Sector view', { icon: mode === 'sector' ? 'fa-circle-notch' : 'fa-map' })}
             ${btn('map-note', 'Note', { icon: 'fa-pen' })}
             ${btn('map-center', '', { icon: 'fa-crosshairs', title: 'Centre on ship' })}
@@ -199,6 +210,8 @@ function mount(body) {
 export function doJump() {
     const st = S();
     const g = galaxy();
+    if (st.transit) return toast('warning', 'Already in transit.');
+    if (st.dead || st.combat || isDown(st.captain)) return toast('warning', 'You are in no state to travel.');
     if (st.route.length < 2) return toast('warning', 'No course laid in.');
     const to = g.systems[st.route[1]];
     const cost = jumpCost(st, st.loc.system, to.id);
@@ -211,24 +224,15 @@ export function doJump() {
         if (st.captain.credits < cost.fare) { blip('error'); return toast('error', `A berth costs ${cost.fare} cr.`); }
         st.captain.credits -= cost.fare;
     }
-    advanceTime(cost.hours * 60, { routine: true });
-    st.loc = { system: to.id, station: 0, docked: !st.ship, place: '' };
-    st.visited[to.id] = true;
-    st.route = st.route.slice(1);
-    if (st.route.length < 2) st.route = [];
+    beginTransit(to.id, cost.hours, { passenger: !st.ship });
     selected = to.id;
-    view = null;
     addLog(st.ship
-        ? `Jump complete: ${from.name} to ${to.name} (${cost.d} ly, ${cost.fuel} fuel, ${cost.hours} h).`
-        : `Arrived at ${to.stations[0].name}, ${to.name} as a passenger (${cost.fare} cr, ${cost.hours} h).`, 'nav');
-    st.pendingEvent = `${st.ship ? `The ${st.ship.name} has just completed a ${cost.hours}-hour jump from ${from.name}` : `${st.captain.name} has just spent ${cost.hours} hours as a paying passenger on a transport from ${from.name}`} and arrived in the ${to.name} system (${factionById(to.faction).name} space, ${SECURITY_LABELS[to.security].toLowerCase()} security${to.hazard ? `, ${to.hazard.toLowerCase()}` : ''}). Describe the arrival.`;
-    for (const fn of jumpHooks) {
-        try { fn(st, from, to); } catch (e) { console.error('[Ship-OS] jump hook failed', e); }
-    }
+        ? `Jump engaged: ${from.name} to ${to.name} (${cost.d} ly, ${cost.fuel} fuel, about ${cost.hours} h in transit).`
+        : `Boarded a transport from ${from.name} to ${to.name} (${cost.fare} cr, about ${cost.hours} h).`, 'nav');
+    st.pendingEvent = `${st.ship ? `The ${st.ship.name} has just entered jump` : `${st.captain.name} has just boarded a passenger transport, which has entered jump`} from ${from.name} toward ${to.name}. The transit takes about ${cost.hours} hours of ship time and is lived, not skipped: life aboard goes on.`;
     blip('jump');
-    saveCheckpoint(`Arrival: ${to.name}`, true);
     commit('jump');
-    toast('success', `Arrived in ${to.name}.`);
+    toast('success', `Jump engaged. ${cost.hours} h to ${to.name}.`);
 }
 
 export function initMap() {

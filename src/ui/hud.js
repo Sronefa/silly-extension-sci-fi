@@ -187,11 +187,12 @@ function renderHud() {
         if (!st && hasChat()) wizard.mount(body);
         return;
     }
-    if (!tabs.some(t => t.id === active)) active = tabs[0]?.id;
-    nav.innerHTML = tabs.map(t => `<button type="button" class="sf-tab${t.id === active ? ' active' : ''}" data-sf="tab" data-tab="${t.id}">
+    const shown = tabs.filter(t => !t.when || t.when(st));
+    if (!shown.some(t => t.id === active)) active = shown.find(t => t.id === 'status')?.id ?? shown[0]?.id;
+    nav.innerHTML = shown.map(t => `<button type="button" class="sf-tab${t.id === active ? ' active' : ''}" data-sf="tab" data-tab="${t.id}">
         <i class="fa-solid ${t.icon}"></i><span>${esc(t.label)}</span>${t.badge?.(st) ? `<b class="sf-badge">${esc(t.badge(st))}</b>` : ''}</button>`).join('');
     const tab = tabs.find(t => t.id === active);
-    const scroll = body.scrollTop;
+    const scroll = body.dataset.tab === active ? body.scrollTop : 0;
     body.dataset.tab = active;
     body.innerHTML = renderTabBody(tab, st);
     tab.mount?.(body, st);
