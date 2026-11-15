@@ -176,7 +176,7 @@ export function initCoreTabs() {
     registerTab({ id: 'status', label: 'Status', icon: 'fa-gauge-high', order: 10, widgets: ['position', 'vitals', 'body', 'activities', 'party', 'clock', 'checkpoints', 'encounter'] });
     registerTab({ id: 'ship', label: 'Ship', icon: 'fa-rocket', order: 16, widgets: ['ship', 'systems', 'hangar', 'noship'] });
     registerTab({ id: 'gear', label: 'Gear', icon: 'fa-boxes-stacked', order: 30, widgets: ['account', 'loadout', 'gear', 'cargo'] });
-    registerTab({ id: 'dossier', label: 'Dossier', icon: 'fa-id-card', order: 40, widgets: ['missions', 'factions', 'contacts', 'trackers'], badge: (st) => st.missions.filter(m => m.status === 'active').length || '' });
+    registerTab({ id: 'dossier', label: 'Dossier', icon: 'fa-id-card', order: 40, widgets: ['missions', 'factions', 'contacts', 'trackers', 'archive'], badge: (st) => st.missions.filter(m => m.status === 'active').length || '' });
     registerTab({ id: 'log', label: 'Log', icon: 'fa-terminal', order: 90, widgets: ['console', 'shiplog'] });
 
     registerActions({

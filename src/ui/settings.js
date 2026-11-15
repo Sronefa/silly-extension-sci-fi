@@ -3,6 +3,7 @@ import { settings, saveSettings, toast, ctx } from '../core/st.js';
 import { S, deleteCampaign, importCampaign, notify } from '../core/state.js';
 import { applyLayout, confirmAsk } from './hud.js';
 import { refreshPrompt } from '../core/ailink.js';
+import { sideProfiles, sideCall } from '../core/llm.js';
 
 const PALETTES = {
     cyan: 'Fleet cyan',
@@ -75,6 +76,14 @@ export function initSettings() {
             ${check('injectNearby', 'Include local stations and jump lanes')}
             ${check('aiCommands', 'Let the AI update the state with hidden &lt;sf&gt; tags')}
             <label>Injection depth <input type="number" class="text_pole" min="0" max="20" data-sfs="injectDepth"></label>
+            <h4>Second model and agents</h4>
+            <small>Background jobs can use a different, faster model than the one that writes the story. Save it as a Connection Profile in SillyTavern, then pick it here.</small>
+            <label>Background jobs use <select class="text_pole" data-sfs="sideSource"><option value="main">The same model as the chat</option><option value="profile">A connection profile</option></select></label>
+            <label>Connection profile <select class="text_pole" data-sfs="sideProfile" id="sf-side-profile"></select></label>
+            <div class="flex-container"><div class="menu_button" id="sf-side-test">Test the background model</div></div>
+            ${check('tracker', 'Tracker pass: a model reads each reply and updates the state', 'One extra call per AI reply. Works together with, or instead of, the hidden tags written by the story model')}
+            ${check('loreAgent', 'Lorebook agent: keeps a campaign lorebook up to date', 'Creates, updates, merges and switches entries in a lorebook bound to this chat')}
+            <label>Lorebook agent runs every <input type="number" class="text_pole" min="1" max="50" data-sfs="loreEvery"> AI replies</label>
             <h4>Campaign in this chat</h4>
             <div class="flex-container">
                 <div class="menu_button" id="sf-export">Export save</div>
@@ -87,6 +96,21 @@ export function initSettings() {
     host.appendChild(wrap);
 
     const cfg = settings();
+    const fillProfiles = () => {
+        const sel = wrap.querySelector('#sf-side-profile');
+        const list = sideProfiles();
+        sel.innerHTML = `<option value="">${list.length ? 'Choose a profile' : 'No connection profiles saved'}</option>` + list.map(p => `<option value="${p.id}">${p.name.replace(/[<>&"]/g, '')}${p.model ? ` (${String(p.model).replace(/[<>&"]/g, '')})` : ''}</option>`).join('');
+    };
+    fillProfiles();
+    wrap.querySelector('#sf-side-profile').addEventListener('pointerdown', () => { const v = cfg.sideProfile; fillProfiles(); wrap.querySelector('#sf-side-profile').value = v; });
+    wrap.querySelector('#sf-side-test').addEventListener('click', async () => {
+        toast('info', 'Calling the background model…');
+        const t0 = Date.now();
+        try {
+            const out = await sideCall({ system: 'You are a ship computer.', prompt: 'Reply with exactly: LINK ESTABLISHED', maxTokens: 20 });
+            toast('success', `Answered in ${((Date.now() - t0) / 1000).toFixed(1)} s: ${String(out).slice(0, 60)}`);
+        } catch (e) { toast('error', `The background model did not answer: ${e.message}`); }
+    });
     const sync = () => {
         wrap.querySelectorAll('[data-sfs]').forEach(el => {
             const k = el.dataset.sfs;

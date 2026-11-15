@@ -1,5 +1,6 @@
 // On-foot tactical combat. Zones with cover, line of sight and distance; each turn is a move,
 // an action and a bonus action. The player controls one character; everyone else acts on their own.
+import { sideCall } from '../core/llm.js';
 import { S, addLog } from '../core/state.js';
 import { ctx, settings } from '../core/st.js';
 import { uid, norm, pick as pickRng, clamp } from '../core/util.js';
@@ -152,12 +153,10 @@ function say(u, kind, detail = '') {
     const entry = log(`${sheet.name}: "${any(BARKS[kind] ?? BARKS.start)}"`, 'say');
     const cfg = settings();
     if (!cfg.combatSpeech || speechBusy || (c.speechCalls ?? 0) >= 6) return;
-    const gen = ctx().generateRaw;
-    if (typeof gen !== 'function') return;
     c.speechCalls = (c.speechCalls ?? 0) + 1;
     speechBusy = true;
     const prompt = `Scene: a firefight at ${c.scene}. ${sheet.name}${u.side === 'enemy' ? ' (hostile)' : ' (an ally of the protagonist)'} ${detail || kind}. Write only the single short line they shout, in character, at most 12 words. No quotation marks, no narration.`;
-    Promise.resolve(gen({ prompt, systemPrompt: 'You write terse, gritty combat barks for a grounded science fiction story.', responseLength: 40 }))
+    sideCall({ prompt, system: 'You write terse, gritty combat barks for a grounded science fiction story.', maxTokens: 40 })
         .then((text) => {
             const line = String(text ?? '').split('\n')[0].replace(/^["'“]+|["'”]+$/g, '').trim();
             if (line && C() === c) { entry.text = `${sheet.name}: "${line.slice(0, 140)}"`; redrawHooks.forEach(fn => fn()); }

@@ -31,6 +31,9 @@ What works today:
 - **Campaign per chat**: state is stored in the chat's metadata, so each chat is its own save. Export and import as JSON.
 - **Sector map**: about 28 star systems generated from a seed, with factions, security levels, economies, stations, jump lanes, route plotting, jumps that cost fuel and time, and an orbital view of each system. Pan, pinch and wheel zoom.
 - **AI link**: the current state is injected into the prompt, and the AI can change it with a hidden block such as `<sf>credits -200; time +3h</sf>`. The block is removed from the message and shown as small chips. Swiping or deleting that message rolls the change back.
+- **Second model**: background jobs can run on a separate, faster model saved as a SillyTavern Connection Profile, or on the chat's own model.
+- **Tracker pass** (optional): after each AI reply a model reads it and records what changed (money, items, wounds, time, meals, travel, contacts), so the story model does not have to write tags. Can be used together with tags or instead of them.
+- **Lorebook agent** (optional): every few replies an archivist model creates, updates, merges and switches entries in a lorebook bound to the chat, so people, places and plot threads survive summarisation. It only touches its own entries. See them in the Dossier tab under Archive.
 - **Interface restyle**: five colour schemes, angular panels, scanlines, starfield, and an alert status that recolours the whole interface.
 - **Slash commands**: `/sf <commands>`, `/sf-open [tab]`, `/sf-status`. Macros: `{{sf_date}}`, `{{sf_location}}`, `{{sf_credits}}`, `{{sf_ship}}`.
 

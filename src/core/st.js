@@ -34,6 +34,12 @@ export const DEFAULT_SETTINGS = {
     injectNearby: true,
     aiCommands: true,
     hideTags: true,
+    // Side model and agents
+    sideSource: 'main',
+    sideProfile: '',
+    tracker: false,
+    loreAgent: false,
+    loreEvery: 6,
 };
 
 export function settings() {

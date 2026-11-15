@@ -19,7 +19,18 @@ export function registerPromptSection(fn) {
     extraSections.push(fn);
 }
 
-export function buildTelemetry() {
+/** The command reference shared by the main model's instructions and the tracker pass. */
+export function COMMAND_GUIDE() {
+    return 'Commands: credits/debt/hull/shields/fuel/supplies/health/stress ±N; health "party member" ±N; time +Nh|+Nm|+Nd; xp <skill> N (award 5-20 when a skill was meaningfully used); '
+        + 'nourishment/hydration/rest/hygiene/morale ±N; system <reactor|engines|shields|weapons|sensors|lifesupport> ±N; '
+        + 'location "place"; dock "station"; undock; jump "star system"; cargo add|remove "name" N; item add|remove "name" N; '
+        + 'injury add "name" minor|moderate|severe|critical; injury heal "name"; rep "faction" ±N; '
+        + 'mission add "title" reward N; mission done|fail "title"; crew add|remove "name" "role"; contact "name" ±N; '
+        + 'tracker "name" ±N; alert green|yellow|red; log "entry"; wound <head|thorax|abdomen|"left arm"|"right arm"|"left leg"|"right leg"> N [bleed|arterial|fracture|burn|concussion] for specific injuries outside of fights; die "cause" (only if the character is truly killed); '
+        + 'combat "place" <enemy> <count> [<enemy> <count>...] [ambush|surprise] when a fight begins. Enemy types: ' + Object.keys(ENEMIES).join(', ') + ', or any quoted name.';
+}
+
+export function buildTelemetry({ instructions = true } = {}) {
     const st = S();
     if (!st) return '';
     if (st.dead) return `[SHIP-OS: ${st.captain.name} is dead${st.deathCause ? ` (${st.deathCause})` : ''}. Narrate the death and its aftermath. The character takes no further actions.]`;
@@ -94,16 +105,15 @@ export function buildTelemetry() {
     }
     if (st.pendingEvent) L.push(`EVENT TO NARRATE NOW: ${st.pendingEvent}`);
 
-    if (cfg.aiCommands) {
+    if (instructions && cfg.aiCommands) {
         L.push('[SHIP-OS UPDATES. When events in your reply change the state above, end the reply with one hidden block listing only what actually changed, one command per line, in this format: <sf>credits -200\ntime +3h\nhull -15</sf>. '
-            + 'Commands: credits/debt/hull/shields/fuel/supplies/health/stress ±N; health "party member" ±N; time +Nh|+Nm|+Nd; xp <skill> N (award 5-20 when a skill was meaningfully used); '
-            + 'nourishment/hydration/rest/hygiene/morale ±N; system <reactor|engines|shields|weapons|sensors|lifesupport> ±N; '
-            + 'location "place"; dock "station"; undock; jump "star system"; cargo add|remove "name" N; item add|remove "name" N; '
-            + 'injury add "name" minor|moderate|severe|critical; injury heal "name"; rep "faction" ±N; '
-            + 'mission add "title" reward N; mission done|fail "title"; crew add|remove "name" "role"; contact "name" ±N; '
-            + 'tracker "name" ±N; alert green|yellow|red; log "entry"; wound <head|thorax|abdomen|"left arm"|"right arm"|"left leg"|"right leg"> N [bleed|arterial|fracture|burn|concussion] for specific injuries outside of fights; die "cause" (only if the character is truly killed). '
-            + 'FIGHTS: when violence breaks out, do NOT narrate the fight. Stop at the instant it begins and add: combat "place" <enemy> <count> [<enemy> <count>...] [ambush|surprise]. Enemy types: ' + Object.keys(ENEMIES).join(', ') + ', or any quoted name. The game resolves the fight and gives you the result to narrate afterwards. '
+            + COMMAND_GUIDE() + ' '
+            + 'FIGHTS: when violence breaks out, do NOT narrate the fight. Stop at the instant it begins and add the combat command. The game resolves the fight and gives you the result to narrate afterwards. '
             + 'TIME: always include a time command for how long the scene took, usually minutes. Never skip ahead hours or days on your own. Never mention the block in the narration.]');
+    } else if (instructions && cfg.tracker) {
+        L.push('[SHIP-OS RULES. The game tracks the numbers above by itself, so never print stat blocks. '
+            + 'FIGHTS: when violence breaks out, do NOT narrate the fight. Stop at the instant it begins; the game resolves the fight and gives you the result to narrate afterwards. '
+            + 'TIME: never skip ahead hours or days on your own.]');
     }
     return L.join('\n');
 }
@@ -134,11 +144,11 @@ function processMessage(mesId) {
     TAG_RE.lastIndex = 0;
     const hasTags = cfg.aiCommands && TAG_RE.test(msg.mes);
     // Every reply takes some story time. If the AI did not say how much, assume a short beat.
-    if (!(hasTags && /(^|[\n;>])\s*time\b/i.test(msg.mes)) && cfg.autoMinutes > 0 && !cur.combat && !cur.dead) {
-        advanceTime(Number(cfg.autoMinutes));
-        commit('auto-time');
-    }
-    if (!hasTags) return;
+    // When the tracker pass is on, it reads the reply and decides, so the default waits for it.
+    const timed = hasTags && /(^|[\n;>])\s*time\b/i.test(msg.mes);
+    const deferTime = replyHooks.length > 0 && cfg.tracker;
+    if (!timed && !deferTime) autoTime();
+    if (!hasTags) { runReplyHooks(mesId, msg, timed); return; }
 
     const applied = [];
     const failed = [];
@@ -159,10 +169,29 @@ function processMessage(mesId) {
     // With streaming the text is already on screen, so redraw it without the tags.
     try { c.updateMessageBlock?.(mesId, msg); } catch { /* not rendered yet */ }
     c.saveChat?.();
+    runReplyHooks(mesId, msg, timed);
+}
+
+const replyHooks = [];
+/** Background agents (tracker pass, lorebook agent) run after each AI reply has been processed. */
+export function onReply(fn) { replyHooks.push(fn); }
+function runReplyHooks(mesId, msg, timed) {
+    for (const fn of replyHooks) {
+        try { fn({ mesId, msg, timed }); } catch (e) { console.error('[Ship-OS] reply hook failed', e); }
+    }
+}
+
+/** Adds the default "a reply takes a few minutes" beat. */
+export function autoTime() {
+    const cfg = settings();
+    const cur = S();
+    if (!cur || !(cfg.autoMinutes > 0) || cur.combat || cur.dead) return;
+    advanceTime(Number(cfg.autoMinutes));
+    commit('auto-time');
 }
 
 /** Adds a small "telemetry updated" chip under a message that changed the state. */
-function decorateMessage(mesId) {
+export function decorateMessage(mesId) {
     const info = ctx().chat?.[mesId]?.extra?.scifi_os;
     const el = document.querySelector(`#chat .mes[mesid="${mesId}"] .mes_block`);
     if (!el) return;
