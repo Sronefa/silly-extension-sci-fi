@@ -98,9 +98,10 @@ export function clockIn() {
     if (!a) throw new Error('you have nothing booked');
     if (a.on) throw new Error('already started');
     if (!present(st, a)) throw new Error(`you are not there. Go to the ${areaName(st, a.area).toLowerCase()} first`);
+    kinds[a.kind]?.start?.(st, a);
     a.on = true;
     a.started = st.minutes;
-    kinds[a.kind]?.start?.(st, a);
+    a.ev = st.pendingEvent;
     return `Started: ${a.name}`;
 }
 
@@ -110,6 +111,7 @@ export function quit() {
     const a = st.activity;
     if (!a) throw new Error('you have nothing booked');
     st.activity = null;
+    dropEvent(st, a);
     if (a.on) return kinds[a.kind]?.stop?.(st, a, 'quit') ?? `Walked out: ${a.name}`;
     return kinds[a.kind]?.miss?.(st, a, 'cancelled') ?? `Cancelled: ${a.name}`;
 }
@@ -126,6 +128,9 @@ export function carryOn(mins = 60) {
     return st.activity ? `${fmtDuration(m)} of ${name.toLowerCase()} done, ${fmtDuration(st.activity.need - st.activity.done)} to go` : '';
 }
 
+/** A scene prompt this commitment queued and nobody narrated yet gives way to what happened next. */
+function dropEvent(st, a) { if (a.ev && st.pendingEvent === a.ev) st.pendingEvent = null; }
+
 export function activityTick(st, mins) {
     const a = st.activity;
     if (!a) return;
@@ -141,9 +146,10 @@ export function activityTick(st, mins) {
     if (present(st, a)) {
         const before = a.done;
         a.done = Math.min(a.need, a.done + mins);
-        if (before < a.need / 2 && a.done >= a.need / 2 && a.done < a.need) kinds[a.kind]?.half?.(st, a);
+        if (before < a.need / 2 && a.done >= a.need / 2 && a.done < a.need) { dropEvent(st, a); kinds[a.kind]?.half?.(st, a); a.ev = st.pendingEvent; }
         if (a.done >= a.need) {
             st.activity = null;
+            dropEvent(st, a);
             const text = kinds[a.kind]?.finish?.(st, a);
             if (text) addLog(text, 'story');
         }
@@ -151,6 +157,7 @@ export function activityTick(st, mins) {
         a.away += mins;
         if (a.away > 45) {
             st.activity = null;
+            dropEvent(st, a);
             const text = kinds[a.kind]?.stop?.(st, a, 'left') ?? `Abandoned: ${a.name}.`;
             if (text) addLog(text, 'story');
         }

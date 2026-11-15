@@ -318,6 +318,7 @@ export function custodyAct(action, advanceTime) {
         const a = book(st, { kind: 'detail', custody: true, need: 480, name: c.type === 'prison' ? 'Prison work detail' : `The day's work for ${c.owner}`, note: c.type === 'slave' ? `The work: ${c.work}.` : '' });
         a.on = true; a.started = st.minutes;
         st.pendingEvent ??= c.type === 'prison' ? `${pc.name} is marched out on an eight hour work detail. Play it: the task, the guards, the other prisoners.` : `${pc.name}'s working day begins: ${c.work}. Eight hours of it. Play it without softening it.`;
+        a.ev = st.pendingEvent;
         return c.type === 'prison' ? 'Out on a work detail: eight hours, lived' : 'The working day begins: eight hours, lived';
     }
     if (action === 'fight') {

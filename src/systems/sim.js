@@ -197,6 +197,8 @@ function removeStack(list, name, qty) {
 const COMMANDS = {
     credits(st, [v]) {
         const d = aiMode ? parseDelta(v) : null;
+        // Wages come from the game when the hours have been worked, and nobody in custody is handed money.
+        if (d && (d.set ? d.v - st.captain.credits : d.v) > 0 && (st.activity?.kind === 'work' || st.custody)) throw new Error(st.custody ? 'a prisoner or a slave is not handed money by the story' : 'wages are paid by the game when the shift is done');
         if (d && (d.set ? d.v - st.captain.credits : d.v) > AI_CREDIT_CAP) {
             st.captain.credits += AI_CREDIT_CAP;
             return `Credits +${AI_CREDIT_CAP} (capped: larger sums are paid through contracts and trade)`;
@@ -298,6 +300,8 @@ const COMMANDS = {
     craving(st, [v]) { return `Craving ${applyDelta(st.captain, 'craving', v, 0, 100)}`; },
     debt(st, [v]) {
         const d = aiMode ? parseDelta(v) : null;
+        // Wages come from the game when the hours have been worked, and nobody in custody is handed money.
+        if (d && (d.set ? d.v - st.captain.credits : d.v) > 0 && (st.activity?.kind === 'work' || st.custody)) throw new Error(st.custody ? 'a prisoner or a slave is not handed money by the story' : 'wages are paid by the game when the shift is done');
         if (d && (d.set ? d.v < st.captain.debt : d.v < 0)) throw new Error('debt is only cleared by paying it');
         return `Debt ${applyDelta(st.captain, 'debt', v, 0, 1e12)}`;
     },
