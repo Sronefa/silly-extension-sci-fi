@@ -1,5 +1,6 @@
 // Ship-OS: Space Opera Suite. Entry point for the SillyTavern extension.
 import { initAgentsUi } from './src/ui/agents.js';
+import { initShipCombatUi } from './src/ui/shipcombat.js';
 import { settings, on } from './src/core/st.js';
 import { S, migrate, notify } from './src/core/state.js';
 import { initAiLink, refreshPrompt } from './src/core/ailink.js';
@@ -27,6 +28,7 @@ function start() {
         setScreens(wizardApi, sheet.deathHtml);
         registerActions(wizardActions);
         initCombatUi();
+        initShipCombatUi();
         initAgentsUi();
         initHud();
         initSettings();

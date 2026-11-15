@@ -14,7 +14,7 @@ https://github.com/Sronefa/silly-extension-sci-fi
 
 ## Status
 
-The framework, the character system, the time system and on-foot tactical combat are in. Ship and mech combat, the economy and the fail-state rules are being designed and are added as modules on top.
+The framework, the character system, the time system and on-foot tactical combat are in. The economy and the fail-state rules are being designed and are added as modules on top.
 
 What works today:
 
@@ -25,6 +25,8 @@ What works today:
 - **Body and wounds**: seven body parts with their own hit points. Bleeding, arterial bleeds, fractures, burns and concussions, each treated with the right item (Dermal Patch, Hemoclamp, Bone-weld Splint, Burn Gel, Medkit, Nanite Injector, Field Surgery Kit and more). A destroyed head is death, a destroyed thorax leaves you down and dying.
 - **Armor**: classes 0 to 6 against weapon penetration, with durability. Civilian clothes stop nothing, a marine hardsuit stops most small arms until it wears out, and power armor has its own frame hit points.
 - **On-foot combat**: turn-based on a zone map with line of sight, cover, range bands and high ground. Each turn is a move, an action and a bonus action. You play only your own character; party members and enemies act on their own, with morale, retreats and surrenders. The AI starts a fight with `<sf>combat "Cargo bay" pirate 3</sf>` and narrates it once, from the after-action report, when it ends.
+- **Ship combat**: a 2D tactical plot resolved in simultaneous 30-second pulses. Hulls run from single-seat fighters and mechs to a 1.6 km capital ship, all built from the same mounts and compartments. Big ships answer the helm slowly (a capital takes four minutes), fighters at once. Sensors and track quality, running dark, jammers, decoys, missiles and point defence, shields, armor by facing, compartment damage, fires, repair teams, heat, reactor overload, emergency jumps that can strand you, escape pods, surrender, salvage and boarding (which hands over to on-foot combat). Start one with `<sf>shipcombat "Tarsis picket" raider 2 allies lancer 1</sf>`.
+- **Stations**: what you control in a battle depends on your post. A captain or pilot has everything, a strike force commander also signals other ships, an officer works one console, and crew or passengers get no tactical picture at all. Set with `post gunnery "ISV Castellan" frigate`. The Ship tab is hidden when you have no vessel and no clearance.
 - **Death**: checkpoints or permadeath, chosen at creation.
 - **Console (HUD)** with tabs: Status, Sheet, Ship, Nav, Gear, Dossier, Log. Full-screen sheet with bottom tabs on phones.
 - **Widgets**: on wide screens every panel can be popped out of the console and dragged anywhere. Positions are remembered.
@@ -52,6 +54,7 @@ Used by the AI inside `<sf>…</sf>`, by `/sf`, and by the console on the Log ta
 | `location`, `dock`, `undock`, `jump` | `jump "Casen Gate"` |
 | `cargo add/remove`, `item add/remove` | `cargo add "Medical Supplies" 4` |
 | `combat`, `wound`, `eat`, `drink`, `sleep`, `wash`, `relax` | `combat "Cargo bay" pirate 3`, `wound larm 20 bleed`, `sleep 6h` |
+| `shipcombat`, `post` | `shipcombat "Belt" raider 2 ambush`, `post captain "ISV Castellan" frigate`, `post none` |
 | `injury add/heal` | `injury add "Fractured rib" moderate` |
 | `rep`, `contact` | `rep "Sol Accord" +5` |
 | `mission add/done/fail/drop` | `mission add "Deliver medicine" reward 4000` |

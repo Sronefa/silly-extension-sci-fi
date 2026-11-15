@@ -7,6 +7,7 @@ import { fmtInt } from './util.js';
 import { NEEDS, SHIP_SYSTEMS, FACTIONS, SHIP_WEAPONS, PERSONAL_WEAPONS, ARMORS } from '../data/catalog.js';
 import { ATTRIBUTES, SKILL_DEFS, TRAITS, FLAWS, CYBERWARE, CRAFT_CLASSES } from '../data/chargen.js';
 import { ENEMIES } from '../data/combat.js';
+import { VESSELS } from '../data/vessels.js';
 import { attrOf, skillOf, originOf, hasFx } from '../systems/character.js';
 import { describeBody, isDown } from '../systems/body.js';
 import { factionById, SECURITY_LABELS, systemDistance } from '../systems/galaxy.js';
@@ -27,7 +28,9 @@ export function COMMAND_GUIDE() {
         + 'injury add "name" minor|moderate|severe|critical; injury heal "name"; rep "faction" ±N; '
         + 'mission add "title" reward N; mission done|fail "title"; crew add|remove "name" "role"; contact "name" ±N; '
         + 'tracker "name" ±N; alert green|yellow|red; log "entry"; wound <head|thorax|abdomen|"left arm"|"right arm"|"left leg"|"right leg"> N [bleed|arterial|fracture|burn|concussion] for specific injuries outside of fights; die "cause" (only if the character is truly killed); '
-        + 'combat "place" <enemy> <count> [<enemy> <count>...] [ambush|surprise] when a fight begins. Enemy types: ' + Object.keys(ENEMIES).join(', ') + ', or any quoted name.';
+        + 'combat "place" <enemy> <count> [<enemy> <count>...] [ambush|surprise] when a fight begins. Enemy types: ' + Object.keys(ENEMIES).join(', ') + ', or any quoted name; '
+        + 'shipcombat "place" <hull> <count> [<hull> <count>...] [allies <hull> <count>...] [ambush] when a space battle begins (do not narrate it either). Hulls: ' + Object.keys(VESSELS).join(', ') + '; '
+        + 'post <captain|commander|xo|pilot|helm|gunnery|engineering|sensors|crew|passenger> "ship name" <hull> when the character takes up a position aboard a vessel they do not own; post none when they leave it.';
 }
 
 export function buildTelemetry({ instructions = true } = {}) {
