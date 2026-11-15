@@ -27,12 +27,12 @@ export const SHIP_WEAPONS = {
 
 // Ship hulls the player can fly.
 export const SHIP_CLASSES = {
-    sparrow: { id: 'sparrow', name: 'Sparrow-class Courier', role: 'Courier', hull: 220, shields: 90, armor: 2, fuel: 30, fuelPerLy: 0.6, cargo: 20, evasion: 25, crewMax: 2, weapons: ['pulse'], price: 90000 },
-    mule: { id: 'mule', name: 'Mule-class Light Freighter', role: 'Light Freighter', hull: 400, shields: 140, armor: 4, fuel: 40, fuelPerLy: 0.9, cargo: 60, evasion: 12, crewMax: 4, weapons: ['pulse', 'pd'], price: 140000 },
-    lancer: { id: 'lancer', name: 'Lancer-class Corvette', role: 'Corvette', hull: 360, shields: 200, armor: 6, fuel: 35, fuelPerLy: 1.0, cargo: 25, evasion: 20, crewMax: 5, weapons: ['rail', 'pulse', 'missile'], price: 240000 },
-    pathfinder: { id: 'pathfinder', name: 'Pathfinder-class Explorer', role: 'Explorer', hull: 320, shields: 160, armor: 4, fuel: 70, fuelPerLy: 0.7, cargo: 35, evasion: 16, crewMax: 4, weapons: ['pulse', 'pd'], price: 190000 },
-    atlas: { id: 'atlas', name: 'Atlas-class Bulk Hauler', role: 'Heavy Freighter', hull: 700, shields: 180, armor: 8, fuel: 60, fuelPerLy: 1.4, cargo: 160, evasion: 5, crewMax: 8, weapons: ['autocannon', 'pd'], price: 320000 },
-    warden: { id: 'warden', name: 'Warden-class Frigate', role: 'Frigate', hull: 650, shields: 300, armor: 10, fuel: 50, fuelPerLy: 1.5, cargo: 40, evasion: 10, crewMax: 12, weapons: ['rail', 'rail', 'missile', 'pd'], price: 520000 },
+    sparrow: { id: 'sparrow', name: 'Sparrow-class Courier', role: 'Courier', hull: 220, shields: 90, armor: 2, fuel: 30, fuelPerLy: 0.6, cargo: 20, evasion: 25, crewMax: 2, weapons: ['pulse'], price: 60000 },
+    mule: { id: 'mule', name: 'Mule-class Light Freighter', role: 'Light Freighter', hull: 400, shields: 140, armor: 4, fuel: 40, fuelPerLy: 0.9, cargo: 60, evasion: 12, crewMax: 4, weapons: ['pulse', 'pd'], price: 100000 },
+    lancer: { id: 'lancer', name: 'Lancer-class Corvette', role: 'Corvette', hull: 360, shields: 200, armor: 6, fuel: 35, fuelPerLy: 1.0, cargo: 25, evasion: 20, crewMax: 5, weapons: ['rail', 'pulse', 'missile'], price: 1700000 },
+    pathfinder: { id: 'pathfinder', name: 'Pathfinder-class Explorer', role: 'Explorer', hull: 320, shields: 160, armor: 4, fuel: 70, fuelPerLy: 0.7, cargo: 35, evasion: 16, crewMax: 4, weapons: ['pulse', 'pd'], price: 140000 },
+    atlas: { id: 'atlas', name: 'Atlas-class Bulk Hauler', role: 'Heavy Freighter', hull: 700, shields: 180, armor: 8, fuel: 60, fuelPerLy: 1.4, cargo: 160, evasion: 5, crewMax: 8, weapons: ['autocannon', 'pd'], price: 1300000 },
+    warden: { id: 'warden', name: 'Warden-class Frigate', role: 'Frigate', hull: 650, shields: 300, armor: 10, fuel: 50, fuelPerLy: 1.5, cargo: 40, evasion: 10, crewMax: 12, weapons: ['rail', 'rail', 'missile', 'pd'], price: 6500000 },
 };
 
 export const SHIP_SYSTEMS = [

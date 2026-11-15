@@ -212,6 +212,7 @@ export function doJump() {
     const st = S();
     const g = galaxy();
     if (st.transit) return toast('warning', 'Already in transit.');
+    if (st.custody) return toast('warning', st.custody.type === 'prison' ? 'You are in prison.' : 'You are not free to go anywhere.');
     if (st.dead || st.combat || isDown(st.captain)) return toast('warning', 'You are in no state to travel.');
     if (st.route.length < 2) return toast('warning', 'No course laid in.');
     const to = g.systems[st.route[1]];
