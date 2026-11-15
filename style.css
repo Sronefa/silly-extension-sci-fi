@@ -838,3 +838,50 @@ body.sf-theme ::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.25); }
 .sf-dk-room.fire { background: rgba(255, 120, 40, 0.45); }
 .sf-dk-room.dead { background: repeating-linear-gradient(45deg, rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0.6) 5px, rgba(255, 90, 79, 0.25) 5px, rgba(255, 90, 79, 0.25) 10px); }
 .sf-dk-detail { display: flex; flex-direction: column; gap: 3px; padding-top: 4px; }
+
+/* ---- Economy: exchange terminal, port services, ledger ---- */
+.sf-num { font-family: var(--sf-font-mono); font-size: 13px; text-align: right; white-space: nowrap; }
+.sf-up { color: var(--sf-ok); }
+.sf-down { color: var(--sf-crit); }
+.sf-flat { color: var(--sf-dim); font-size: 9px; }
+.sf-crit-txt { color: var(--sf-crit); }
+.sf-wide { width: 100%; }
+.sf-chiprow { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
+.sf-chipbtn { padding: 4px 9px; font: 11px var(--sf-font); letter-spacing: 0.06em; text-transform: uppercase; color: var(--sf-dim); background: transparent; border: 1px solid var(--sf-line); cursor: pointer; }
+.sf-chipbtn.active { color: var(--sf-accent); border-color: var(--sf-line-strong); background: rgba(var(--sf-accent-rgb), 0.14); }
+.sf-mk-head, .sf-mk-row { display: grid; grid-template-columns: minmax(0, 1fr) 54px 54px 54px 40px; gap: 6px; align-items: center; }
+.sf-mk-head { padding: 4px 0; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--sf-dim); border-bottom: 1px solid var(--sf-line); }
+.sf-mk-head span:not(:first-child) { text-align: right; }
+.sf-mk-row { padding: 7px 0; border-bottom: 1px dashed rgba(var(--sf-accent-rgb), 0.14); cursor: pointer; }
+.sf-mk-row.ro { cursor: default; padding: 4px 0; }
+.sf-mk-row:hover { background: rgba(var(--sf-accent-rgb), 0.06); }
+.sf-mk-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+.sf-mk-name.t-luxury { color: var(--sf-accent2); }
+.sf-mk-name.t-contraband { color: var(--sf-crit); }
+.sf-mk-name.t-raw { color: var(--sf-dim); }
+.sf-mk.open > .sf-mk-row .sf-mk-name { color: var(--sf-accent); font-weight: 600; }
+.sf-have { color: var(--sf-accent); font-weight: 700; }
+.sf-mk-list.short { max-height: 40vh; overflow-y: auto; }
+.sf-mk-detail { display: flex; flex-direction: column; gap: 7px; padding: 8px 8px 12px; margin: 0 0 8px 2px; border-left: 2px solid var(--sf-accent); background: rgba(0, 0, 0, 0.22); }
+.sf-mk-stats { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--sf-dim); }
+.sf-mk-stats b { font-family: var(--sf-font-mono); color: var(--sf-text); font-weight: 400; }
+.sf-mk-qty { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.sf-mk-in { width: 72px; text-align: center; font-family: var(--sf-font-mono); }
+.sf-mk-two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.sf-mk-two > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.sf-graph { width: 100%; height: 110px; display: block; background: rgba(0, 0, 0, 0.3); border: 1px solid var(--sf-line); }
+.sf-gr-line { fill: none; stroke: var(--sf-accent); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.sf-gr-area { fill: rgba(var(--sf-accent-rgb), 0.12); stroke: none; }
+.sf-gr-base { stroke: var(--sf-dim); stroke-width: 1; stroke-dasharray: 3 4; vector-effect: non-scaling-stroke; opacity: 0.6; }
+.sf-gr-grid { stroke: rgba(var(--sf-accent-rgb), 0.12); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.sf-gr-dot { fill: var(--sf-accent2); }
+.sf-gr-txt { fill: var(--sf-dim); font: 9px var(--sf-font-mono); }
+.sf-ledger time { font: 11px var(--sf-font-mono); flex: none; }
+.sf-btn-gap { width: 34px; flex: none; }
+@media (max-width: 1000px) {
+    .sf-mk-head, .sf-mk-row { grid-template-columns: minmax(0, 1fr) 46px 46px 46px 30px; gap: 4px; }
+    .sf-mk-two { grid-template-columns: 1fr; }
+}
+/* More tabs than fit: the bar scrolls sideways instead of crushing the labels. */
+.sf-tabs { overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--sf-line) transparent; }
+.sf-tab { flex: 1 0 auto; min-width: 52px; padding-left: 6px; padding-right: 6px; }

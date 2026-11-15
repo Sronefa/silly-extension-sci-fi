@@ -35,6 +35,17 @@ export function killPlayer(cause = '') {
     addLog(`${st.captain.name} has died${cause ? `: ${cause}` : ''}.`, 'combat');
 }
 
+const tickHooks = [];
+/** Feature modules that live on the clock (markets, wear, fees, wages) register here. */
+export function onTick(fn) { tickHooks.push(fn); }
+
+// True while commands written by the AI are being run. The storyteller narrates; it does not
+// get to mint money, so a few commands are limited when they come from it.
+let aiMode = false;
+export const isAiCommand = () => aiMode;
+const AI_CREDIT_CAP = 2000;
+const AI_REWARD_CAP = 20000;
+
 const arrivalHooks = [];
 /** Feature modules can react to arrivals (encounters, market refresh, wages…). */
 export function onArrival(fn) { arrivalHooks.push(fn); }
@@ -80,6 +91,9 @@ export function advanceTime(minutes, { asleep = false } = {}) {
         st.ship.supplies = Math.max(0, st.ship.supplies - (people * hours) / 24);
     }
     if (st.transit && st.minutes >= st.transit.end) completeTransit();
+    for (const fn of tickHooks) {
+        try { fn(st, mins); } catch (e) { console.error('[Ship-OS] tick hook failed', e); }
+    }
 }
 
 /** Starts a journey to another system. The trip is lived in story time; nothing is skipped. */
@@ -182,6 +196,11 @@ function removeStack(list, name, qty) {
  */
 const COMMANDS = {
     credits(st, [v]) {
+        const d = aiMode ? parseDelta(v) : null;
+        if (d && (d.set ? d.v - st.captain.credits : d.v) > AI_CREDIT_CAP) {
+            st.captain.credits += AI_CREDIT_CAP;
+            return `Credits +${AI_CREDIT_CAP} (capped: larger sums are paid through contracts and trade)`;
+        }
         return `Credits ${applyDelta(st.captain, 'credits', v, -1e12, 1e12)}`;
     },
     hull(st, [v]) { return `Hull ${applyDelta(needShip(st), 'hull', v, 0, st.ship.maxHull)}`; },
@@ -277,7 +296,11 @@ const COMMANDS = {
         return `Stress ${applyDelta(st.captain, 'stress', v, 0, 100)}`;
     },
     craving(st, [v]) { return `Craving ${applyDelta(st.captain, 'craving', v, 0, 100)}`; },
-    debt(st, [v]) { return `Debt ${applyDelta(st.captain, 'debt', v, 0, 1e12)}`; },
+    debt(st, [v]) {
+        const d = aiMode ? parseDelta(v) : null;
+        if (d && (d.set ? d.v < st.captain.debt : d.v < 0)) throw new Error('debt is only cleared by paying it');
+        return `Debt ${applyDelta(st.captain, 'debt', v, 0, 1e12)}`;
+    },
     xp(st, args) {
         const target = args.length > 2 ? who(st, args[0]) : st.captain;
         if (!target) throw new Error(`nobody called "${args[0]}"`);
@@ -439,7 +462,7 @@ const COMMANDS = {
         if (/^(add|new|\+)$/i.test(op)) {
             const m = { id: uid('ms'), title, status: 'active', reward: 0, giver: '', notes: '', added: st.minutes };
             for (let i = 0; i < rest.length - 1; i += 2) {
-                if (/^reward$/i.test(rest[i])) m.reward = Number(String(rest[i + 1]).replace(/,/g, '')) || 0;
+                if (/^reward$/i.test(rest[i])) m.reward = Math.min(Number(String(rest[i + 1]).replace(/,/g, '')) || 0, aiMode ? AI_REWARD_CAP : Infinity);
                 if (/^giver$/i.test(rest[i])) m.giver = rest[i + 1];
                 if (/^notes?$/i.test(rest[i])) m.notes = rest[i + 1];
             }
@@ -546,13 +569,16 @@ export function runCommand(line) {
 }
 
 /** Runs a block of commands separated by newlines or semicolons. */
-export function runBlock(block) {
+export function runBlock(block, { ai = false } = {}) {
     const results = [];
-    for (const line of String(block).split(/[\n;]+/)) {
-        const t = line.trim();
-        if (!t) continue;
-        results.push(runCommand(t));
-    }
+    aiMode = ai;
+    try {
+        for (const line of String(block).split(/[\n;]+/)) {
+            const t = line.trim();
+            if (!t) continue;
+            results.push(runCommand(t));
+        }
+    } finally { aiMode = false; }
     return results;
 }
 

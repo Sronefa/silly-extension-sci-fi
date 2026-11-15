@@ -5,6 +5,7 @@ import { beginTransit, transitInfo, fmtDuration, onArrival } from '../systems/si
 import { esc, fmtInt, clamp } from '../core/util.js';
 import { toast } from '../core/st.js';
 import { ECONOMIES } from '../data/catalog.js';
+import { fuelMult } from '../systems/services.js';
 import { isDown } from '../systems/body.js';
 import { SECTOR_W, SECTOR_H, findRoute, factionById, SECURITY_LABELS, systemDistance } from '../systems/galaxy.js';
 import { blip } from './sfx.js';
@@ -85,7 +86,7 @@ function jumpCost(st, a, b) {
     const d = systemDistance(galaxy(), a, b);
     // Without a ship you travel as a passenger: slower, and paid in credits instead of fuel.
     if (!st.ship) return { d, fuel: 0, fare: Math.round(120 + d * 45), hours: Math.round(10 + d * 2.5) };
-    return { d, fuel: Math.round(d * st.ship.fuelPerLy * 10) / 10, fare: 0, hours: Math.round(4 + d * 1.5) };
+    return { d, fuel: Math.round(d * st.ship.fuelPerLy * fuelMult(st) * 10) / 10, fare: 0, hours: Math.round(4 + d * 1.5) };
 }
 
 function infoBody(st) {
