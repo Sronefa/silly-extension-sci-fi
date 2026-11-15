@@ -1,5 +1,7 @@
 // Static game data: factions, economies, commodities, ships, weapons, enemies.
 
+import { GOODS, ECON } from './economy.js';
+
 export const FACTIONS = [
     { id: 'accord', name: 'Sol Accord', color: '#4fa3ff', desc: 'Old Earth bureaucratic federation. Lawful, heavily patrolled core.' },
     { id: 'combine', name: 'Kepler Combine', color: '#f2b84b', desc: 'Corporate conglomerate. Everything has a price, including justice.' },
@@ -8,36 +10,9 @@ export const FACTIONS = [
     { id: 'ashen', name: 'Ashen Fleet', color: '#ff5a4f', desc: 'Pirate clans and deserters who prey on unguarded lanes.' },
 ];
 
-export const ECONOMIES = {
-    agricultural: { label: 'Agricultural', produces: ['food', 'water', 'textiles'], demands: ['machinery', 'medical', 'electronics'] },
-    industrial: { label: 'Industrial', produces: ['machinery', 'polymers', 'alloys'], demands: ['ore', 'food', 'water'] },
-    mining: { label: 'Mining', produces: ['ore', 'raremetals', 'ice'], demands: ['food', 'machinery', 'medical'] },
-    hightech: { label: 'High-Tech', produces: ['electronics', 'medical', 'datacores'], demands: ['raremetals', 'polymers', 'luxury'] },
-    refinery: { label: 'Refinery', produces: ['fuelcells', 'alloys', 'polymers'], demands: ['ore', 'ice', 'machinery'] },
-    military: { label: 'Military', produces: ['weapons', 'alloys'], demands: ['food', 'medical', 'electronics', 'fuelcells'] },
-    outpost: { label: 'Frontier Outpost', produces: ['ice'], demands: ['food', 'water', 'medical', 'machinery', 'weapons'] },
-    tourism: { label: 'Tourism', produces: ['luxury'], demands: ['food', 'luxury', 'narcotics', 'textiles'] },
-};
-
-export const COMMODITIES = [
-    { id: 'water', name: 'Purified Water', base: 18, vol: 0.15 },
-    { id: 'food', name: 'Hydroponic Food', base: 32, vol: 0.2 },
-    { id: 'ice', name: 'Volatile Ice', base: 24, vol: 0.2 },
-    { id: 'textiles', name: 'Synthweave Textiles', base: 55, vol: 0.2 },
-    { id: 'ore', name: 'Unrefined Ore', base: 40, vol: 0.25 },
-    { id: 'polymers', name: 'Industrial Polymers', base: 70, vol: 0.2 },
-    { id: 'alloys', name: 'Structural Alloys', base: 120, vol: 0.2 },
-    { id: 'machinery', name: 'Heavy Machinery', base: 210, vol: 0.2 },
-    { id: 'fuelcells', name: 'Fusion Fuel Cells', base: 150, vol: 0.3 },
-    { id: 'medical', name: 'Medical Supplies', base: 260, vol: 0.3 },
-    { id: 'electronics', name: 'Consumer Electronics', base: 310, vol: 0.25 },
-    { id: 'raremetals', name: 'Rare Earth Metals', base: 480, vol: 0.35 },
-    { id: 'datacores', name: 'Encrypted Data Cores', base: 650, vol: 0.4 },
-    { id: 'luxury', name: 'Luxury Goods', base: 720, vol: 0.35 },
-    { id: 'weapons', name: 'Small Arms', base: 540, vol: 0.3, restricted: ['accord', 'hegemony'] },
-    { id: 'narcotics', name: 'Neural Stimulants', base: 900, vol: 0.5, restricted: ['accord', 'combine', 'hegemony', 'compact'] },
-];
-
+// Economy types and trade goods live in economy.js; these are the views older code expects.
+export const ECONOMIES = Object.fromEntries(Object.entries(ECON).map(([k, e]) => [k, { label: e.label, produces: Object.keys(e.makes), demands: Object.keys(e.needs) }]));
+export const COMMODITIES = GOODS;
 export const commodityById = (id) => COMMODITIES.find(c => c.id === id);
 
 // Ship weapons. acc = hit chance by range band [long, medium, close].

@@ -77,7 +77,7 @@ async function trackerPass({ mesId, msg, timed }) {
     if (st.combat || already.some(a => /^combat started/i.test(a))) lines = lines.filter(l => !/^(combat|fight|battle|encounter)\b/i.test(l));
     const applied = [];
     const failed = [];
-    for (const r of runBlock(lines.join('\n'))) {
+    for (const r of runBlock(lines.join('\n'), { ai: true })) {
         if (!r.text) continue;
         (r.ok ? applied : failed).push(r.text);
     }

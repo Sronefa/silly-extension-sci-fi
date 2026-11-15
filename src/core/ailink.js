@@ -157,7 +157,7 @@ function processMessage(mesId) {
     const failed = [];
     TAG_RE.lastIndex = 0;
     msg.mes = msg.mes.replace(TAG_RE, (_, a, b) => {
-        for (const r of runBlock(a ?? b ?? '')) {
+        for (const r of runBlock(a ?? b ?? '', { ai: true })) {
             if (!r.text) continue;
             (r.ok ? applied : failed).push(r.text);
         }
