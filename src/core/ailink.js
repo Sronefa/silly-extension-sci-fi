@@ -29,8 +29,8 @@ export function COMMAND_GUIDE() {
         + 'mission add "title" reward N; mission done|fail "title"; crew add|remove "name" "role"; contact "name" ±N; '
         + 'tracker "name" ±N; alert green|yellow|red; log "entry"; wound <head|thorax|abdomen|"left arm"|"right arm"|"left leg"|"right leg"> N [bleed|arterial|fracture|burn|concussion] for specific injuries outside of fights; die "cause" (only if the character is truly killed); '
         + 'combat "place" <enemy> <count> [<enemy> <count>...] [ambush|surprise] when a fight begins. Enemy types: ' + Object.keys(ENEMIES).join(', ') + ', or any quoted name; '
-        + 'shipcombat "place" <hull> <count> [<hull> <count>...] [allies <hull> <count>...] [ambush] when a space battle begins (do not narrate it either). Hulls: ' + Object.values(VESSELS).filter(v => !v.decoy).map(v => v.id).join(', ') + '; '
-        + 'post <captain|commander|xo|pilot|helm|gunnery|engineering|sensors|crew|passenger> "ship name" <hull> when the character takes up a position aboard a vessel they do not own; post none when they leave it.';
+        + 'shipcombat "place" <hull> <count> [<hull> <count>...] [allies <hull> <count>...] [ambush] when a space battle begins (do not narrate it either). Hulls: ' + Object.values(VESSELS).filter(v => !v.decoy && !v.civil).map(v => v.id).join(', ') + ' (add _c to a warship or fighter id for its lighter civilian-pattern version, as used by corporations); '
+        + 'post <captain|commander|xo|pilot|helm|gunnery|engineering|sensors|crew|passenger> "ship name" <hull> when the character takes up a position aboard a vessel they do not own; post none when they leave it. Capital ships (carriers, battleships, battlecruisers) are built by states and never privately owned: a character commands one only by rank, through post.';
 }
 
 export function buildTelemetry({ instructions = true } = {}) {

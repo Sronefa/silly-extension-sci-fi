@@ -801,3 +801,13 @@ body.sf-theme ::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.25); }
 .sf-cblog li.warn { border-left-color: var(--sf-warn); color: var(--sf-warn); }
 .sf-cblog li.dim { color: var(--sf-dim); }
 .sf-cblog li small { color: var(--sf-dim); }
+
+/* Ship registry */
+.sf-reg-list { max-height: 60vh; overflow-y: auto; }
+.sf-reg > .sf-row { cursor: pointer; }
+.sf-reg.open > .sf-row b { color: var(--sf-accent); }
+.sf-reg-detail { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px 10px; border-left: 2px solid var(--sf-accent); margin: 2px 0 8px 4px; }
+.sf-tag.l-open { color: var(--sf-ok); border-color: var(--sf-ok); }
+.sf-tag.l-licensed { color: var(--sf-info); border-color: var(--sf-info); }
+.sf-tag.l-restricted { color: var(--sf-warn); border-color: var(--sf-warn); }
+.sf-tag.l-state { color: var(--sf-crit); border-color: var(--sf-crit); }

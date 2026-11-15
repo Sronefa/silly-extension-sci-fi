@@ -216,7 +216,7 @@ export function signature(s) {
     if (Object.values(s.rooms).some(r => r.fire)) sig *= 1.2;
     return sig;
 }
-export const dcTeams = (s) => Math.max(0, sizeOf(s).dcTeams - (s.casualties > clsOf(s).crew * 0.5 ? 1 : 0));
+export const dcTeams = (s) => Math.max(0, sizeOf(s).dcTeams + (clsOf(s).dcBonus ?? 0) - (s.casualties > clsOf(s).crew * 0.5 ? 1 : 0));
 /** Pulses an emergency jump needs to spool: bigger drives take longer. */
 export const warpSpool = (s) => 3 + clsOf(s).size;
 export const overheated = (s) => s.heat >= clsOf(s).heat;
@@ -499,6 +499,12 @@ function destroyShip(sc, s, why) {
     s.hull = 0; s.shield = 0; s.speed *= 0.5;
     if (s.mimic) { if (why) say(sc, `The contact answering as ${s.name} bursts apart: it was a decoy drone.`, 'info'); return; }
     say(sc, `${s.name} ${why}.`, s.side === 'ally' ? 'bad' : 'good', true);
+    if (clsOf(s).volatile && !s.exploded) {
+        // A tanker does not break up quietly.
+        s.exploded = true;
+        say(sc, `${s.name}'s tanks go up in a fireball.`, 'warn', true);
+        for (const o of sc.ships) if (o !== s && o.state !== 'destroyed' && o.state !== 'escaped' && dist(o, s) < 110) damage(sc, o, 1400 * (1 - dist(o, s) / 110 * 0.6), 7, 'missile', s, '', { fire: 2.5 });
+    }
 }
 
 function roomDestroyed(sc, s, id, attacker) {

@@ -178,7 +178,7 @@ export function initCoreTabs() {
     // No vessel and no clearance aboard one means no ship panel at all.
     registerTab({ id: 'ship', label: 'Ship', icon: 'fa-rocket', order: 16, when: (st) => !!st.ship || st.craft.length > 0 || (POSTS[st.post?.role]?.clearance ?? 0) >= 2, widgets: ['posting', 'ship', 'systems', 'hangar', 'scstart'] });
     registerTab({ id: 'gear', label: 'Gear', icon: 'fa-boxes-stacked', order: 30, widgets: ['account', 'loadout', 'gear', 'cargo'] });
-    registerTab({ id: 'dossier', label: 'Dossier', icon: 'fa-id-card', order: 40, widgets: ['missions', 'factions', 'contacts', 'trackers', 'archive'], badge: (st) => st.missions.filter(m => m.status === 'active').length || '' });
+    registerTab({ id: 'dossier', label: 'Dossier', icon: 'fa-id-card', order: 40, widgets: ['missions', 'factions', 'contacts', 'trackers', 'archive', 'registry'], badge: (st) => st.missions.filter(m => m.status === 'active').length || '' });
     registerTab({ id: 'log', label: 'Log', icon: 'fa-terminal', order: 90, widgets: ['console', 'shiplog'] });
 
     registerActions({

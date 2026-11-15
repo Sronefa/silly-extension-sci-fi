@@ -5,7 +5,7 @@ import { registerTab, registerWidget, registerActions, gauge, btn, openHud, redr
 import { S, commit, onChange, addLog } from '../core/state.js';
 import { toast, ctx, settings } from '../core/st.js';
 import { esc, clamp, fmtInt } from '../core/util.js';
-import { SIZES, SC_WEAPONS, ARC_NAMES, ROOMS, VESSELS, POSTS, THROTTLES, POWER_PRESETS, TRACK_NAMES, PULSE_SECONDS, sensorGrade, GRADE_NAMES, LOADS, loadsFor } from '../data/vessels.js';
+import { SIZES, SC_WEAPONS, ARC_NAMES, ROOMS, VESSELS, POSTS, THROTTLES, POWER_PRESETS, TRACK_NAMES, PULSE_SECONDS, sensorGrade, GRADE_NAMES, LOADS, loadsFor, STYLES, FAMILIES, LEGAL, hullAccess } from '../data/vessels.js';
 import {
     SC, clsOf, sizeOf, shipById, playerShip, isActive, dist, bearing, angDiff, playerPost, clearance, resolveClass,
     startShipCombatFromTokens, runPulse, order, pendingOrders, weaponBlock, hitChance, orderSeconds, quality, joinBoardingDefence, dcTeams, autoDc,
@@ -292,6 +292,46 @@ function postingHtml(st) {
         <small class="sf-dim">In battle you control: ${post.can.length ? esc(post.can.join(', ')) : 'nothing'}.</small>` : '<small class="sf-dim">You have no access to the ship\'s systems.</small>'}`;
 }
 
+// ---- The ship registry: every hull class in known space -----------------------------------
+
+const reg = { family: '', faction: '', size: '', open: null };
+
+function registryHtml(st) {
+    const all = Object.values(VESSELS).filter(v => !v.decoy);
+    const list = all.filter(v => (!reg.family || (reg.family === 'civil' ? v.civil : v.family === reg.family && !v.civil)) && (!reg.faction || (reg.faction === 'none' ? !v.faction : v.faction === reg.faction)) && (!reg.size || v.size === Number(reg.size)))
+        .sort((a, b) => a.size - b.size || a.name.localeCompare(b.name));
+    const sel = (key, opts) => `<select class="sf-input" data-sf-change="reg-filter" data-k="${key}">${opts.map(([v, n]) => `<option value="${v}"${String(reg[key]) === String(v) ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select>`;
+    const rows = list.map(v => {
+        const open = reg.open === v.id;
+        const access = hullAccess(v, { standing: v.faction ? (st.reputation?.[v.faction] ?? 0) : Math.max(0, ...Object.values(st.reputation ?? {})) });
+        const arms = Object.entries(v.mounts.reduce((mm, x) => { mm[x.id] = (mm[x.id] ?? 0) + 1; return mm; }, {})).map(([id, n]) => `${SC_WEAPONS[id].name}${n > 1 ? ` ×${n}` : ''}`).join(', ');
+        const detail = open ? `<div class="sf-reg-detail">
+            <small class="sf-dim">${esc(v.desc)}</small>
+            ${v.faction ? `<small class="sf-dim"><b>${esc(STYLES[v.faction].name)} build.</b> ${esc(STYLES[v.faction].look)}</small>` : ''}
+            <div class="sf-kv"><span>Size</span><b>${esc(SIZES[v.size].name)}, about ${fmtInt(SIZES[v.size].length)} m</b></div>
+            <div class="sf-kv"><span>Crew</span><b>${fmtInt(v.crew)}</b></div>
+            <div class="sf-kv"><span>Hull / shields</span><b>${fmtInt(v.hull)} / ${fmtInt(v.shield)}</b></div>
+            <div class="sf-kv"><span>Armor bow / flank / stern</span><b>${v.armor.join(' / ')}</b></div>
+            <div class="sf-kv"><span>Speed</span><b>${fmtInt(v.speed)} km per pulse</b></div>
+            <div class="sf-kv"><span>Sensors</span><b>${fmtInt(v.sensors)} km, ${esc(GRADE_NAMES[sensorGrade(v)])}</b></div>
+            <div class="sf-kv"><span>Armament</span><b>${esc(arms || 'none')}</b></div>
+            ${v.wing?.length ? `<div class="sf-kv"><span>Air wing</span><b>${esc(v.wing.map(w => VESSELS[w].name).join(', '))}</b></div>` : ''}
+            ${v.mech ? `<div class="sf-kv"><span>Pilot</span><b>Mech Piloting ${v.minSkill} or better</b></div>` : ''}
+            <div class="sf-kv"><span>Price</span><b>${v.price ? `${fmtInt(v.price)} cr` : 'not for sale'}</b></div>
+            <small class="${access.ok ? 'sf-ok-line' : 'sf-warn-line'}">${esc(access.legal.name)}. ${esc(access.why)}</small>
+        </div>` : '';
+        return `<li class="sf-reg${open ? ' open' : ''}"><div class="sf-row" data-sf="reg-open" data-id="${v.id}"><span class="sf-grow"><b>${esc(v.name)}</b> <small class="sf-dim">${esc(v.role)}</small></span>
+            <span class="sf-tag l-${v.legal}">${esc(LEGAL[v.legal].name)}</span></div>${detail}</li>`;
+    }).join('');
+    return `<div class="sf-check-form">
+            ${sel('family', [['', 'All families'], ...Object.entries(FAMILIES), ['civil', 'Civilian-pattern warships']])}
+            ${sel('faction', [['', 'All builders'], ...Object.entries(STYLES).map(([id, f]) => [id, f.name]), ['none', 'Independent yards']])}
+            ${sel('size', [['', 'All sizes'], ...Object.values(SIZES).map(z => [z.id, z.name])])}
+        </div>
+        <small class="sf-dim">${list.length} of ${all.length} hull classes. Tap one for details.</small>
+        <ul class="sf-list sf-reg-list">${rows || '<li class="sf-dim">Nothing matches.</li>'}</ul>`;
+}
+
 // ---- Wiring -----------------------------------------------------------------------------
 
 function act(fn) {
@@ -331,6 +371,7 @@ export function initShipCombatUi() {
             <select class="sf-input" data-scs="n">${[1, 2, 3, 4, 6].map(n => `<option>${n}</option>`).join('')}</select></div>
             <div class="sf-actions">${btn('sc-start', 'Start battle', { icon: 'fa-rocket', cls: 'primary' })}</div>`,
     });
+    registerWidget({ id: 'registry', title: () => 'Ship registry', render: registryHtml });
     registerTab({ id: 'tactical', label: 'Tactical', icon: 'fa-satellite', order: 4, when: (st) => !!st.shipCombat || !!st.lastShipCombat, widgets: ['sctime', 'scplot', 'scstation', 'schelm', 'scweapons', 'scsensors', 'sceng', 'sccommand', 'sclog', 'scaar'] });
 
     const me = () => playerShip(SC());
@@ -384,6 +425,8 @@ export function initShipCombatUi() {
             const on = !list[0].on;
             act(() => { let d = 0; for (const w of list) d = order(ps, 'weapon', { n: w.n, on }); told(d, 'Fire order'); });
         },
+        'reg-filter'(el) { reg[el.dataset.k] = el.value; reg.open = null; redraw(); },
+        'reg-open'(el) { reg.open = reg.open === el.dataset.id ? null : el.dataset.id; redraw(); },
         'sc-load'(el) { const ps = me(); const [id, arc] = el.dataset.key.split(':'); act(() => told(order(ps, 'load', { id, arc, load: el.dataset.v }), `Reload with ${LOADS[el.dataset.v].full.toLowerCase()}`)); },
         'sc-mine'() { act(() => told(order(me(), 'mine', true), 'Mine')); },
         'sc-ram'() { const ps = me(); act(() => told(order(ps, 'ram', ps.ramming ? null : ps.target), ps.ramming ? 'Belay ramming' : 'Ramming order')); },
