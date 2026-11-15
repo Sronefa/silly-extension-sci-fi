@@ -770,6 +770,13 @@ body.sf-theme ::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.25); }
 .sf-plot .course { stroke: var(--sf-ok); stroke-width: calc(var(--k) * 0.8px); opacity: 0.45; }
 .sf-plot .course.queued { stroke: var(--sf-warn); stroke-dasharray: calc(var(--k) * 4px); opacity: 0.7; }
 .sf-plot .aim { stroke: var(--sf-crit); stroke-width: calc(var(--k) * 0.6px); stroke-dasharray: calc(var(--k) * 2px) calc(var(--k) * 4px); opacity: 0.6; }
+.sf-plot .mine { fill: none; stroke-width: calc(var(--k) * 1.2px); }
+.sf-plot .mine.friend { stroke: #4fd8ff; }
+.sf-plot .mine.foe { stroke: var(--sf-crit); }
+.sf-plot .tether { stroke: var(--sf-warn); stroke-width: calc(var(--k) * 1.2px); }
+.sf-plot .sf-ship .sand { fill: rgba(255, 220, 150, 0.12); stroke: rgba(255, 220, 150, 0.5); stroke-width: calc(var(--k) * 0.8px); stroke-dasharray: calc(var(--k) * 1.5px) calc(var(--k) * 3px); }
+.sf-loads { margin-top: 4px; }
+.sf-loads .sf-btn { padding: 2px 8px; min-height: 28px; font-size: 0.8em; }
 .sf-plot .msl.friend { fill: #4fd8ff; }
 .sf-plot .msl.foe { fill: var(--sf-crit); }
 .sf-turn-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }

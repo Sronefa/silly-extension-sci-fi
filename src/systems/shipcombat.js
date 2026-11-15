@@ -3,7 +3,7 @@
 // carry a single-seat fighter and a capital ship; size decides how fast a ship answers orders.
 import { S, addLog } from '../core/state.js';
 import { uid, clamp, norm } from '../core/util.js';
-import { SIZES, SC_WEAPONS, ARCS, ROOMS, VESSELS, VESSEL_ALIASES, POSTS, THROTTLES, POWER_PRESETS, PULSE_SECONDS, sensorGrade, boardingPods } from '../data/vessels.js';
+import { SIZES, SC_WEAPONS, ARCS, ROOMS, VESSELS, VESSEL_ALIASES, POSTS, THROTTLES, POWER_PRESETS, PULSE_SECONDS, sensorGrade, boardingPods, LOADS, loadsFor, MASS } from '../data/vessels.js';
 import { startCombat, parseEnemies } from './combat.js';
 import { skillOf, gainXp, skillCheck } from './character.js';
 import { applyHit, randomPart, isDead } from './body.js';
@@ -34,7 +34,7 @@ export function resolveClass(word) {
     if (!n) return null;
     if (VESSELS[n]) return VESSELS[n];
     if (VESSEL_ALIASES[n]) return VESSELS[VESSEL_ALIASES[n]];
-    const direct = Object.values(VESSELS).find(v => norm(v.name).includes(n) || norm(v.role) === n);
+    const direct = Object.values(VESSELS).find(v => (n.length >= 4 && norm(v.name).includes(n)) || norm(v.role) === n);
     if (direct) return direct;
     const alias = Object.entries(VESSEL_ALIASES).find(([k]) => n.includes(k));
     return alias ? VESSELS[alias[1]] : null;
@@ -81,7 +81,7 @@ function makeShip(classId, { name, side, x, y, heading, crewQ = 3, morale = 0.5 
         id: uid('v'), name: name || cls.name, cls: cls.id, side, x, y, heading, speed: 0,
         want: { heading, throttle: cls.speed ? 2 : 0 }, queue: [],
         hull: cls.hull, maxHull: cls.hull, armor: [...cls.armor], shield: cls.shield, maxShield: cls.shield, shieldDown: 0,
-        heat: 0, rooms, weapons: cls.mounts.map((mt, n) => ({ n, id: mt.id, arc: mt.arc, ammo: SC_WEAPONS[mt.id].ammo ?? null, on: true, out: false, cd: 0 })),
+        heat: 0, rooms, weapons: cls.mounts.map((mt, n) => ({ n, id: mt.id, arc: mt.arc, ammo: SC_WEAPONS[mt.id].ammo ?? null, on: !SC_WEAPONS[mt.id].nuclear, out: false, cd: 0, load: 'ap' })),
         power: 'balanced', radar: true, jam: false, decoys: cls.decoys ?? 0, decoyUp: 0, evasive: false, overload: false,
         target: null, called: '', missiles: true, dc: [], crewQ, morale, casualties: 0,
         state: 'active', warp: null, fleet: null, hot: false, lostFor: 0,
@@ -162,7 +162,7 @@ export function startShipCombat({ scene = 'Open space', enemy = [], ally = [], a
     for (const g of enemy) place(g, 'enemy');
     const sc = {
         scene, pulse: 0, ships, missiles: [], log: [], playerShip: me.id, role: post.role, own: !!post.own, craft: post.craft ?? null,
-        tracks: { ally: {}, enemy: {} }, hail: null, hailed: false, over: null, prevAlert: st.alert, playerAct: null, stats: { fired: 0, hits: 0 },
+        mines: [], tracks: { ally: {}, enemy: {} }, hail: null, hailed: false, over: null, prevAlert: st.alert, playerAct: null, stats: { fired: 0, hits: 0 },
     };
     if (ambush) { for (const s of ships.filter(x => x.side === 'enemy')) { s.radar = false; s.want.throttle = 1; } }
     if (surprise) { me.radar = false; }
@@ -204,10 +204,10 @@ export const power = (s) => {
 };
 export const topSpeed = (s) => (powered(s) ? clsOf(s).speed * power(s).eng * (roomPct(s, 'drives') > 0 ? 0.3 + 0.7 * roomPct(s, 'drives') : 0) : 0);
 export const turnRate = (s) => (powered(s) ? sizeOf(s).turn * (roomPct(s, 'drives') > 0 ? 0.4 + 0.6 * roomPct(s, 'drives') : 0) * Math.min(1.2, power(s).eng) : 0);
-export const sensorRange = (s) => (powered(s) ? clsOf(s).sensors * (0.15 + 0.85 * roomPct(s, 'sensors')) * (s.radar ? 1 : 0.4) : 0);
+export const sensorRange = (s) => (powered(s) ? clsOf(s).sensors * (0.15 + 0.85 * roomPct(s, 'sensors')) * (s.radar ? 1 : 0.4) * (s.blind > 0 ? 0.25 : 1) : 0);
 export function signature(s) {
     const t = s.want.throttle;
-    let sig = sizeOf(s).sig;
+    let sig = s.sigAs ?? sizeOf(s).sig;
     sig *= s.radar ? 1.4 : 1;
     sig *= t >= 4 ? 1.5 : t >= 3 ? 1.25 : t <= 1 ? 0.75 : 1;
     sig *= 1 + 0.6 * clamp(s.heat / clsOf(s).heat, 0, 1.2);
@@ -220,6 +220,12 @@ export const dcTeams = (s) => Math.max(0, sizeOf(s).dcTeams - (s.casualties > cl
 /** Pulses an emergency jump needs to spool: bigger drives take longer. */
 export const warpSpool = (s) => 3 + clsOf(s).size;
 export const overheated = (s) => s.heat >= clsOf(s).heat;
+/** The tether holding this ship, if someone has a grapple in her. */
+export const tetherOn = (s, sc = SC()) => sc?.tethers?.find(t => t.b === s.id) ?? null;
+/** Has this side seen through a decoy drone yet? */
+export const masked = (sc, side, t) => !!t.mimic && !sc.unmasked?.[side]?.[t.id];
+/** The class a ship appears to be to the other side: a decoy drone answers as its parent. */
+export const shownAs = (sc, side, t) => (masked(sc, side, t) ? clsOf(shipById(t.mimic, sc) ?? t) : clsOf(t));
 
 /** The skill level working one station of a ship: the player's own when they hold it. */
 export function quality(sc, s, domain) {
@@ -240,6 +246,7 @@ export function quality(sc, s, domain) {
 const DOMAIN = {
     heading: 'helm', throttle: 'helm', evasive: 'helm',
     target: 'weapons', weapon: 'weapons', missiles: 'weapons', called: 'weapons',
+    load: 'weapons', mine: 'weapons', ram: 'helm', sand: 'sensors', decoydrone: 'sensors', cut: 'engineering',
     radar: 'sensors', jam: 'sensors', decoy: 'sensors',
     power: 'engineering', overload: 'engineering', dc: 'engineering', warp: 'engineering',
 };
@@ -274,6 +281,8 @@ function inArc(s, w, target) {
 export function evasionOf(sc, t) {
     const cls = clsOf(t);
     if (!cls.speed || !isActive(t)) return 0;
+    if (cls.decoy) return 4;
+    if (tetherOn(t, sc)) return Math.round(sizeOf(t).evasion * 0.2);
     const frac = clamp(t.speed / cls.speed, 0, 1.3);
     return Math.round((sizeOf(t).evasion * frac * (0.4 + 0.6 * roomPct(t, 'drives')) + (t.evasive ? 12 * frac : 0) + quality(sc, t, 'helm') * 1.5 * frac) * (cls.agile ?? 1));
 }
@@ -290,15 +299,20 @@ export function weaponBlock(sc, s, w, t) {
     if (w.ammo !== null && w.ammo <= 0) return 'out of ammunition';
     if (def.kind === 'beam' && s.heatLock) return 'overheated';
     if (dist(s, t) > def.range) return 'out of range';
+    if (def.kind === 'grapple') {
+        if (clsOf(t).size < 2) return 'target too small to grapple';
+        if (t.shield > 0 && t.shieldDown <= 0) return 'target shields are up';
+        if (tetherOn(t, sc)) return 'target already held';
+    }
     if (!inArc(s, w, t)) return 'out of arc';
-    if (w.cd > 0) return 'cycling';
+    if (w.cd > 0) return def.fixed ? `charging, ${w.cd * PULSE_SECONDS} s` : 'cycling';
     return '';
 }
 
 export function hitChance(sc, s, w, t) {
     const def = SC_WEAPONS[w.id];
     const d = dist(s, t);
-    const tsize = clsOf(t).size;
+    const tsize = t.mimic ? clsOf(shipById(t.mimic, sc) ?? t).size : clsOf(t).size;
     let c = def.acc + quality(sc, s, 'weapons') * 3 - 30 * (d / def.range);
     c += tsize <= 2 ? def.track - (tsize === 1 ? 10 : 0) : (tsize - 2) * 6;
     c -= evasionOf(sc, t);
@@ -306,6 +320,13 @@ export function hitChance(sc, s, w, t) {
     if (s.heat > clsOf(s).heat * 0.8) c -= 10;
     if (s.evasive) c -= 15;
     if (s.called) c -= 15;
+    const load = LOADS[w.load];
+    if (def.kind === 'kinetic' && load?.craft && tsize === 1) c += load.craft;
+    // Plasma bolts are slow: anything that can move gets out of the way.
+    if (def.slow) c -= evasionOf(sc, t) * 1.5 + 25 * (d / def.range) + (tsize <= 2 ? 20 : 0);
+    if (def.improvised) c -= 5;
+    if (def.kind === 'beam' && (s.sandUp > 0 || t.sandUp > 0)) c -= 12;
+    if (def.kind === 'grapple') c += (clsOf(t).size - 2) * 8 - (t.speed > 0 ? 10 * clamp(t.speed / (clsOf(t).speed || 1), 0, 1) : 0);
     c += (power(s).wpn - 1) * 12;
     if (s.rooms.cic && s.rooms.cic.hp <= 0) c -= 12;
     return clamp(Math.round(c), 3, 95);
@@ -327,6 +348,12 @@ function applyOrder(sc, s, o) {
         case 'weapon': { const w = s.weapons[o.value.n]; if (w) w.on = !!o.value.on; break; }
         case 'missiles': s.missiles = !!o.value; break;
         case 'fleet': s.fleet = o.value; break;
+        case 'load': for (const w of s.weapons) if (w.id === o.value.id && w.arc === o.value.arc && w.load !== o.value.load) { w.load = o.value.load; w.cd = Math.max(w.cd, 1); } break;
+        case 'mine': layMine(sc, s); break;
+        case 'ram': s.ramming = o.value || null; break;
+        case 'sand': castSand(sc, s); break;
+        case 'decoydrone': launchDecoy(sc, s); break;
+        case 'cut': s.cutting = true; break;
         case 'power': if (POWER_PRESETS[o.value]) s.power = o.value; break;
         case 'radar': s.radar = !!o.value; break;
         case 'jam': if (clsOf(s).jammer) s.jam = !!o.value; break;
@@ -342,7 +369,7 @@ function applyOrder(sc, s, o) {
 export function order(s, type, value, sc = SC()) {
     const delay = Math.round(orderSeconds(sc, s, type === 'fleet' ? 'fleet' : DOMAIN[type], { jitter: true }) / PULSE_SECONDS);
     if (delay <= 0) { applyOrder(sc, s, { type, value }); return 0; }
-    s.queue = s.queue.filter(o => !(o.type === type && (type !== 'weapon' || o.value.n === value.n)));
+    s.queue = s.queue.filter(o => !(o.type === type && (type !== 'weapon' || o.value.n === value.n) && (type !== 'load' || (o.value.id === value.id && o.value.arc === value.arc))));
     s.queue.push({ type, value, at: sc.pulse + delay });
     return delay;
 }
@@ -382,17 +409,30 @@ function updateTracks(sc, first = false) {
                 else if (level === 0) say(sc, `Contact lost: ${t.name}.`, 'warn');
             }
             sc.tracks[side][t.id] = level;
+            if (t.mimic && level >= 2 && isActive(t) && !sc.unmasked?.[side]?.[t.id]) {
+                // A decoy drone only fools sensors at a distance; good suites see through it from farther out.
+                if (mine.some(o => dist(o, t) <= sensorRange(o) * [0, 0.1, 0.18, 0.36, 0.5][sensorGrade(clsOf(o))])) {
+                    ((sc.unmasked ??= {})[side] ??= {})[t.id] = true;
+                    if (side === 'ally') say(sc, `One of the ${t.name} contacts is a decoy drone.`, 'warn');
+                }
+            }
             // A poor sensor suite can misread what it is looking at until it has a firing solution.
             if (side === 'ally' && level === 2 && prev < 2 && t.state === 'active') {
                 const grade = Math.max(...mine.map(o => sensorGrade(clsOf(o))), 1);
                 sc.misid ??= {};
-                if (chance([0, 0.4, 0.18, 0.05, 0.01][grade])) {
+                if (clsOf(t).disguise && grade < 4) sc.misid[t.id] = clsOf(t).disguise;
+                else if (chance([0, 0.4, 0.18, 0.05, 0.01][grade])) {
                     const size = clsOf(t).size;
                     const wrong = Object.values(VESSELS).filter(v => Math.abs(v.size - size) <= 1 && v.id !== t.cls && v.speed);
                     if (wrong.length) sc.misid[t.id] = pickOne(wrong).role;
                 } else delete sc.misid[t.id];
             }
-            if (side === 'ally' && level >= 3 && sc.misid?.[t.id]) { say(sc, `Reclassified: the ${sc.misid[t.id].toLowerCase()} is ${t.name}.`, 'warn'); delete sc.misid[t.id]; }
+            if (side === 'ally' && level >= 3 && sc.misid?.[t.id] && !clsOf(t).disguise) { say(sc, `Reclassified: the ${sc.misid[t.id].toLowerCase()} is ${t.name}.`, 'warn'); delete sc.misid[t.id]; }
+            // A disguised hull holds up until someone gets a close look at her.
+            if (side === 'ally' && clsOf(t).disguise && !t.exposed && level >= 2 && isActive(t) && mine.some(o => dist(o, t) <= sensorRange(o) * [0, 0.08, 0.14, 0.3, 0.45][sensorGrade(clsOf(o))])) {
+                t.exposed = true; delete sc.misid?.[t.id];
+                say(sc, `Warning: ${t.name} is no freighter. She is rigged as a fire ship.`, 'bad', true);
+            }
         }
     }
     updateGhosts(sc);
@@ -457,6 +497,7 @@ function destroyShip(sc, s, why) {
     if (s.state === 'destroyed') return;
     s.state = 'destroyed';
     s.hull = 0; s.shield = 0; s.speed *= 0.5;
+    if (s.mimic) { if (why) say(sc, `The contact answering as ${s.name} bursts apart: it was a decoy drone.`, 'info'); return; }
     say(sc, `${s.name} ${why}.`, s.side === 'ally' ? 'bad' : 'good', true);
 }
 
@@ -491,15 +532,23 @@ function roomDestroyed(sc, s, id, attacker) {
 }
 
 /** Applies one hit: shields, then armor on the struck facing, then hull and what is behind it. */
-export function damage(sc, t, dmg, pen, kind, attacker, called) {
+export function damage(sc, t, dmg, pen, kind, attacker, called, opt = {}) {
     if (t.state === 'destroyed' || t.state === 'escaped') return { dealt: 0 };
     const felt = feltBy(sc, t);
     t.hot = true;
-    if (t.shield > 0 && t.shieldDown <= 0) {
-        const mult = kind === 'beam' ? 1.25 : kind === 'kinetic' ? 0.75 : 1;
+    // A sand cloud scatters coherent light and bleeds the energy out of plasma.
+    if (t.sandUp > 0 && kind === 'beam') { dmg *= 0.35; t.sandHit = sc.pulse; }
+    if (t.sandUp > 0 && kind === 'plasma') dmg *= 0.7;
+    if (kind === 'beam' || kind === 'plasma') t.beamHit = sc.pulse;
+    if (t.shield > 0 && t.shieldDown <= 0 && kind !== 'ram') {
+        const mult = opt.shield ?? (kind === 'beam' ? 1.25 : kind === 'kinetic' ? 0.75 : 1);
+        // Particle beams are not wholly stopped by shields: part of every hit leaks through.
+        const leak = dmg * (opt.bleed ?? 0);
+        dmg -= leak;
         const absorbed = Math.min(t.shield, dmg * mult);
         t.shield -= absorbed;
         dmg -= absorbed / mult;
+        dmg += leak;
         if (t.shield <= 0) { t.shield = 0; t.shieldDown = 3; say(sc, `${t.name}: shields have collapsed.`, t.side === 'ally' ? 'bad' : 'good', felt); }
         if (dmg <= 0.5) return { dealt: 0, shield: true };
     }
@@ -511,7 +560,13 @@ export function damage(sc, t, dmg, pen, kind, attacker, called) {
     if (diff >= -2) t.armor[face] = Math.max(clsOf(t).armor[face] * 0.4, armor - Math.min(0.5, dmg / t.maxHull * 3));
     const dealt = dmg * mult;
     t.hull -= dealt;
+    if (dealt > 0) sc.lastHurt = sc.pulse;
     const out = { dealt, face, pen: diff >= -1 };
+    if (opt.rad && dealt > 0 && clsOf(t).crew) {
+        // Hard radiation: it kills people and cooks electronics behind the plating.
+        t.casualties += Math.max(1, Math.round(clsOf(t).crew * 0.012));
+        if (t.rooms.sensors && t.rooms.sensors.hp > 0) t.rooms.sensors.hp = Math.max(1, t.rooms.sensors.hp - dealt * 0.3);
+    }
     if (diff >= -1) {
         const ids = Object.keys(t.rooms).filter(id => t.rooms[id].hp > 0);
         let id = null;
@@ -524,10 +579,10 @@ export function damage(sc, t, dmg, pen, kind, attacker, called) {
         if (id === 'weapons') { if (chance(clamp(dealt / (t.maxHull * 0.05), 0.15, 0.9))) knockOutWeapon(sc, t); }
         else if (id && id !== 'void' && t.rooms[id] && t.rooms[id].hp > 0) {
             const room = t.rooms[id];
-            const rd = dealt * 0.5;
+            const rd = dealt * 0.5 * (opt.room ?? 1);
             room.hp = Math.max(0, room.hp - rd);
             out.room = id;
-            if (rd > room.max * 0.15 && chance(kind === 'beam' ? 0.3 : 0.18) && !room.fire) { room.fire = true; say(sc, `${t.name}: fire in the ${ROOMS[id].name.toLowerCase()}.`, t.side === 'ally' ? 'bad' : 'good', felt); }
+            if (rd > room.max * 0.15 && chance(Math.min(0.8, (kind === 'beam' || kind === 'plasma' ? 0.3 : 0.18) * (opt.fire ?? 1))) && !room.fire) { room.fire = true; say(sc, `${t.name}: fire in the ${ROOMS[id].name.toLowerCase()}.`, t.side === 'ally' ? 'bad' : 'good', felt); }
             hurtPlayer(sc, t, id, clamp(rd / room.max, 0.3, 1.5));
             if (room.hp <= 0) roomDestroyed(sc, t, id, attacker);
         }
@@ -543,19 +598,20 @@ export function damage(sc, t, dmg, pen, kind, attacker, called) {
 function pickTarget(sc, s) {
     const tracks = sc.tracks[s.side];
     const cls = clsOf(s);
-    const foes = sc.ships.filter(t => t.side !== s.side && isActive(t) && (tracks[t.id] ?? 0) >= 1);
+    const foes = sc.ships.filter(t => t.side !== s.side && isActive(t) && (tracks[t.id] ?? 0) >= 1 && !(t.mimic && !masked(sc, s.side, t)));
     if (!foes.length) return null;
+    const sz = (t) => shownAs(sc, s.side, t).size;
     const heavy = s.weapons.some(w => !w.out && w.id === 'torpedo' && w.ammo > 0);
     const score = (t) => dist(s, t) / 400 - (tracks[t.id] ?? 0) * 0.8
-        + (heavy ? -clsOf(t).size : 0)
-        + (cls.doctrine === 'screen' && clsOf(t).size > 1 ? 2 : 0)
-        + (cls.size >= 4 && clsOf(t).size === 1 ? 1.5 : 0)
+        + (heavy ? -sz(t) : 0)
+        + (cls.doctrine === 'screen' && sz(t) > 1 ? 2 : 0)
+        + (cls.size >= 4 && sz(t) === 1 ? 1.5 : 0)
         - (t.id === s.target ? 0.6 : 0);
     return foes.sort((a, b) => score(a) - score(b))[0];
 }
 
 function gunRanges(s) {
-    const guns = s.weapons.filter(w => !w.out && ['kinetic', 'beam'].includes(SC_WEAPONS[w.id].kind) && (w.ammo === null || w.ammo > 0) && !SC_WEAPONS[w.id].melee);
+    const guns = s.weapons.filter(w => !w.out && ['kinetic', 'beam', 'plasma'].includes(SC_WEAPONS[w.id].kind) && (w.ammo === null || w.ammo > 0) && !SC_WEAPONS[w.id].melee);
     if (!guns.length) return null;
     const r = guns.map(w => SC_WEAPONS[w.id].range);
     return { min: Math.min(...r), max: Math.max(...r) };
@@ -569,7 +625,13 @@ function aiHelm(sc, s) {
         if (!pendingOrders(s, ['throttle']).length && th !== s.want.throttle) order(s, 'throttle', th, sc);
         if (!pendingOrders(s, ['evasive']).length && ev !== s.evasive) order(s, 'evasive', ev, sc);
     };
-    const foes = sc.ships.filter(t => t.side !== s.side && isActive(t));
+    if (cls.decoy) {
+        // A decoy drone shadows its parent on a slightly different course.
+        const parent = shipById(s.mimic, sc);
+        if (parent) { s.want.heading = (parent.want.heading + (s.off ?? 0) + 360) % 360; s.want.throttle = parent.want.throttle; }
+        return;
+    }
+    const foes = sc.ships.filter(t => t.side !== s.side && isActive(t) && !clsOf(t).decoy);
     const known = foes.filter(t => (sc.tracks[s.side][t.id] ?? 0) >= 1);
     const fleeing = s.fleeing || s.fleet?.type === 'withdraw' || (cls.doctrine === 'civilian' && !s.isPlayer) || s.warp !== null;
     if (fleeing) {
@@ -590,12 +652,16 @@ function aiHelm(sc, s) {
         return;
     }
     const d = dist(s, t);
+    if (cls.doctrine === 'ram' && clsOf(t).size >= 2 && (cls.fireship || s.hull > s.maxHull * 0.3)) { s.ramming = t.id; set(bearing(s, t), 4); return; }
     const g = gunRanges(s);
     const hasMissiles = s.weapons.some(w => !w.out && SC_WEAPONS[w.id].kind === 'missile' && w.ammo > 0);
     let want;
     if (cls.doctrine === 'strike') want = g ? g.min * 0.5 : 400;
     else if (cls.doctrine === 'brawl') want = g ? g.min * 0.6 : 200;
     else want = hasMissiles && !g ? 1200 : g ? g.max * 0.75 : 1500;
+    // A fight that has gone quiet draws the ships together: nobody circles out of reach for ever.
+    want *= clamp(1 - Math.max(0, sc.pulse - (sc.lastHurt ?? 0) - 12) / 30, 0.25, 1);
+    const nose = s.weapons.some(w => !w.out && (w.ammo === null || w.ammo > 0) && SC_WEAPONS[w.id].fixed);
     const b = bearing(s, t);
     const small = cls.size === 1;
     if (small) {
@@ -603,6 +669,7 @@ function aiHelm(sc, s) {
         const closing = d > 700 ? 3 : d > 300 ? 2 : 1;
         set(b, closing, d < 500);
     } else if (d > want * 1.15) set(b, d > want * 2 ? 3 : 2);
+    else if (nose) set(b, d < want * 0.4 ? 0 : 1); // a spinal gun only bears when the bow does
     else if (d < want * 0.6 && cls.doctrine !== 'brawl') set((b + 150) % 360, 3);
     else set((b + (angDiff(s.heading, b) >= 0 ? 80 : -80) + 360) % 360, 2); // hold the range and show a broadside
 }
@@ -614,9 +681,25 @@ function aiWeapons(sc, s) {
         if (s.target !== s.fleet.target && !pendingOrders(s, ['target']).length) order(s, 'target', s.fleet.target, sc);
     } else if (id !== s.target && !pendingOrders(s, ['target']).length) order(s, 'target', id, sc);
     if (clsOf(s).pirate && s.pods > 0 && t && clsOf(t).size >= 2) s.called = 'drives'; else if (clsOf(s).pirate) s.called = '';
+    const tt = shipById(s.target, sc);
+    if (tt) {
+        for (const w of s.weapons) {
+            const def = SC_WEAPONS[w.id];
+            const opts = loadsFor(def).map(l => l.id);
+            if (opts.length < 2) continue;
+            const armor = Math.min(...tt.armor);
+            const want = clsOf(tt).size === 1 && opts.includes('flak') ? 'flak' : def.pen - 3 >= armor ? 'he' : 'ap';
+            if (w.load !== want) { w.load = want; w.cd = Math.max(w.cd, 1); }
+        }
+        if (s.weapons.some(w => w.id === 'mines' && !w.out && w.ammo > 0) && dist(s, tt) < 900 && sc.pulse % 3 === 0 && Math.abs(angDiff(bearing(s, tt), s.heading)) > 90) layMine(sc, s);
+    }
     const hold = s.fleet?.type === 'hold';
     if (s.missiles === hold) s.missiles = !hold;
-    for (const w of s.weapons) if (w.on === hold) w.on = !hold;
+    for (const w of s.weapons) {
+        // Nuclear release is never automatic aboard the player's ship, and never at knife range.
+        const want = !hold && (!SC_WEAPONS[w.id].nuclear || (!s.isPlayer && !!tt && shownAs(sc, s.side, tt).size >= 4 && dist(s, tt) > 500));
+        if (w.on !== want) w.on = want;
+    }
 }
 
 function aiEngineering(sc, s) {
@@ -649,6 +732,8 @@ function aiSensors(sc, s) {
     if (!s.radar && (seen || s.hot || sc.pulse > 6 || (known && Object.entries(sc.tracks[s.side]).some(([id, l]) => l >= 2 && dist(s, shipById(id, sc)) < 600)))) s.radar = true;
     if (cls.jammer) s.jam = known && !s.fleeing;
     const inbound = sc.missiles.filter(m => m.target === s.id && dist(m, s) <= SC_WEAPONS[m.wid].speed * 2);
+    if ((s.beamHit ?? -9) >= sc.pulse - 1 && !(s.sandUp > 0)) castSand(sc, s);
+    if (seen && !sc.ships.some(d => d.mimic === s.id && isActive(d)) && chance(0.3)) launchDecoy(sc, s);
     if (inbound.length && s.decoys > 0 && s.decoyUp <= 0) { s.decoys--; s.decoyUp = 2; say(sc, `${s.name} launches decoys.`, 'info', feltBy(sc, s)); }
 }
 
@@ -678,11 +763,17 @@ function aiMorale(sc, s) {
     const cls = clsOf(s);
     if (cls.machine || cls.doctrine === 'hold') return;
     const friends = sc.ships.filter(o => o.side === s.side && isActive(o)).length;
-    const foes = sc.ships.filter(o => o.side !== s.side && isActive(o)).length;
+    const foes = sc.ships.filter(o => o.side !== s.side && isActive(o) && !clsOf(o).decoy).length;
     const hurt = 1 - s.hull / s.maxHull;
     if (!s.fleeing && hurt > 0.55 && chance(s.morale * (hurt + (foes > friends ? 0.2 : 0)) * 0.5)) {
         s.fleeing = true;
         say(sc, `${s.name} is breaking off.`, s.side === 'ally' ? 'warn' : 'good');
+        if (cls.warp && roomPct(s, 'jump') > 0) s.warp = warpSpool(s);
+    }
+    // Nobody keeps up a fight that is going nowhere: after a quarter of an hour without a telling hit, they leave.
+    if (!s.fleeing && s.side === 'enemy' && sc.pulse - (sc.lastHurt ?? 0) > 30) {
+        s.fleeing = true;
+        say(sc, `${s.name} gives up the engagement and turns away.`, 'good');
         if (cls.warp && roomPct(s, 'jump') > 0) s.warp = warpSpool(s);
     }
     const helpless = topSpeed(s) <= 0 || s.weapons.every(w => w.out || w.ammo === 0);
@@ -722,16 +813,36 @@ function fireShip(sc, s) {
     for (const w of s.weapons) {
         if (w.cd > 0) { w.cd--; continue; }
         const def = SC_WEAPONS[w.id];
-        if (def.kind === 'pd') continue; // point defence works on its own, see below
+        if (['pd', 'mine', 'sweeper', 'sand', 'decoy'].includes(def.kind)) continue; // these work on their own, see below
         if (!w.on || !t || !isActive(t) || t.side === s.side) continue;
         if (weaponBlock(sc, s, w, t)) continue;
+        if (def.kind === 'drone') {
+            if (!s.missiles || w.ammo <= 0) continue;
+            w.ammo--; w.cd = 3;
+            const dc = VESSELS[def.spawn];
+            const d = makeShip(dc.id, { name: `${s.name} drone ${LETTERS[sc.ships.filter(q => q.parent === s.id).length % LETTERS.length]}`, side: s.side, x: s.x + (rnd() - 0.5) * 30, y: s.y + (rnd() - 0.5) * 30, heading: s.heading, crewQ: 2, morale: 0 });
+            d.parent = s.id; d.target = t.id; d.speed = s.speed;
+            sc.ships.push(d);
+            say(sc, `${s.name} launches a combat drone.`, s.side === 'ally' ? 'info' : 'warn', feltBy(sc, s));
+            continue;
+        }
+        if (def.kind === 'grapple') {
+            const c = hitChance(sc, s, w, t);
+            w.ammo--; w.cd = def.cycle;
+            if (rnd() * 100 < c) {
+                (sc.tethers ??= []).push({ a: s.id, b: t.id, ttl: def.hold });
+                say(sc, `${s.name} puts a grapple into ${t.name} (${c}%). The line holds.`, s.side === 'ally' ? 'good' : 'bad', true);
+            } else say(sc, `${s.name} fires a grapple at ${t.name} (${c}%) and misses.`, 'dim', feltBy(sc, s) || feltBy(sc, t));
+            continue;
+        }
         if (def.kind === 'missile') {
             if (!s.missiles) continue;
             const n = Math.min(def.salvo, w.ammo);
             w.ammo -= n;
             w.cd = 2;
             for (let i = 0; i < n; i++) sc.missiles.push({ id: uid('m'), side: s.side, from: s.id, target: t.id, wid: w.id, x: s.x, y: s.y, hp: def.hp, fuel: Math.ceil(def.range / def.speed) + 3 });
-            say(sc, `${s.name} launches ${n} ${def.name.replace(/ (Rails|Cell|Tube)$/, '').toLowerCase()}${n > 1 ? 's' : ''} at ${t.name}.`, s.side === 'ally' ? 'info' : 'warn', feltBy(sc, s) || feltBy(sc, t));
+            if (def.nuclear) { sc.nukeBy = s.name; say(sc, `${s.name} launches a NUCLEAR torpedo at ${t.name}.`, 'bad', true); }
+            else say(sc, `${s.name} launches ${n} ${def.name.replace(/ (Rails|Cell|Tube)$/, '').toLowerCase()}${n > 1 ? 's' : ''} at ${t.name}.`, s.side === 'ally' ? 'info' : 'warn', feltBy(sc, s) || feltBy(sc, t));
             s.hot = true;
             continue;
         }
@@ -743,18 +854,20 @@ function fireShip(sc, s) {
             if (rnd() * 100 < c) {
                 hits++;
                 if (s.id === sc.playerShip) sc.stats.hits++;
-                const r = damage(sc, t, def.dmg * (def.kind === 'beam' ? Math.min(1.3, pw.wpn) : 1) * (0.85 + rnd() * 0.3), def.pen, def.kind, s, s.called);
+                const ld = def.kind === 'kinetic' ? (LOADS[w.load] ?? LOADS.ap) : null;
+                const r = damage(sc, t, def.dmg * (ld?.dmg ?? 1) * (def.kind !== 'kinetic' ? Math.min(1.3, pw.wpn) : 1) * (0.85 + rnd() * 0.3), Math.max(1, def.pen + (ld?.pen ?? 0)), def.kind, s, s.called,
+                    ld ? { shield: ld.shield, room: ld.room, fire: ld.fire } : def.shieldMult ? { shield: def.shieldMult, fire: 1.5 } : def.bleed ? { bleed: def.bleed, rad: def.rad } : {});
                 dealt += r.dealt ?? 0;
                 if (r.room) rooms.push(ROOMS[r.room].name.toLowerCase());
             }
         }
         if (w.ammo !== null) w.ammo--;
         if (def.cycle) w.cd = def.cycle;
-        s.heat += def.heat * (def.kind === 'beam' ? 1 : 0.5);
+        s.heat += def.heat * (def.kind === 'kinetic' ? 0.5 : 1);
         s.hot = true;
         const big = clsOf(t).size >= 3 || cls.size >= 3 || feltBy(sc, s) || feltBy(sc, t);
         if (big || hits) {
-            say(sc, `${s.name} fires ${def.name.toLowerCase()} at ${t.name} (${c}%): ${hits ? `${hits} hit${hits > 1 ? 's' : ''}${dealt >= 1 ? `, ${Math.round(dealt)} hull` : ', absorbed'}${rooms.length ? `, ${[...new Set(rooms)].join(' and ')} damaged` : ''}` : 'miss'}.`,
+            say(sc, `${s.name} fires ${def.name.toLowerCase()}${def.kind === 'kinetic' && w.load !== 'ap' ? ` (${LOADS[w.load].name})` : ''} at ${t.name} (${c}%): ${hits ? `${hits} hit${hits > 1 ? 's' : ''}${dealt >= 1 ? `, ${Math.round(dealt)} hull` : ', absorbed'}${rooms.length ? `, ${[...new Set(rooms)].join(' and ')} damaged` : ''}` : 'miss'}.`,
                 hits ? (s.side === 'ally' ? 'good' : 'bad') : 'dim', feltBy(sc, s) || (feltBy(sc, t) && hits > 0));
             if (logAt < sc.log.length - 1) sc.log.splice(logAt, 0, sc.log.pop());
         }
@@ -769,6 +882,7 @@ function pointDefence(sc, t, incoming) {
         if (s.side !== t.side || !isActive(s) || !powered(s)) continue;
         for (const w of s.weapons) {
             const def = SC_WEAPONS[w.id];
+            if (def.kind === 'kinetic' && w.load === 'flak' && !w.out && w.on && w.ammo > 0 && s === t) { for (let i = 0; i < def.shots; i++) guns.push({ s, p: LOADS.flak.intercept }); continue; }
             if (def.kind !== 'pd' || w.out || !w.on) continue;
             if (s !== t && dist(s, t) > def.range * 3) continue;
             for (let i = 0; i < def.shots; i++) guns.push({ s, p: def.intercept * (s === t ? 1 : 0.6) * (0.7 + s.crewQ * 0.08) });
@@ -782,6 +896,156 @@ function pointDefence(sc, t, incoming) {
         if (chance(g.p)) { m.hp--; if (m.hp <= 0) killed++; }
     }
     return killed;
+}
+
+/** A nuclear warhead does not need to hit: it goes off close aboard and everything nearby pays. */
+function nuclearBlast(sc, t, def, from) {
+    say(sc, `NUCLEAR DETONATION close aboard ${t.name}.`, 'bad', true);
+    const at = { x: t.x, y: t.y };
+    const evaded = clamp(evasionOf(sc, t) / 100, 0, 0.5); // a nimble ship is farther from the fireball
+    const dealt = damage(sc, t, def.dmg * (1 - evaded) * (0.85 + rnd() * 0.3), def.pen, 'missile', from, '', { fire: 2.5, rad: true }).dealt ?? 0;
+    for (const o of sc.ships) {
+        if (o === t || o.state === 'destroyed' || o.state === 'escaped') continue;
+        const d = Math.hypot(o.x - at.x, o.y - at.y);
+        if (d <= def.blast) { damage(sc, o, def.dmg * 0.35 * (1 - d / def.blast * 0.6), 8, 'missile', at, '', { fire: 2, rad: true }); say(sc, `${o.name} is caught in the blast.`, o.side === 'ally' ? 'bad' : 'good', feltBy(sc, o)); }
+        if (d <= def.emp && isActive(o)) o.blind = 3;
+    }
+    if (isActive(t)) t.blind = 3;
+    sc.missiles.forEach(m => { if (Math.hypot(m.x - at.x, m.y - at.y) <= def.blast * 2) m.dead = true; });
+    say(sc, 'The pulse whites out every sensor in the area.', 'warn', true);
+    return dealt;
+}
+
+/** Throws a cloud of ablative sand around the ship: beams scatter in it for about a minute, both ways. */
+export function castSand(sc, s) {
+    const w = s.weapons.find(x => x.id === 'sandcaster' && !x.out && x.ammo > 0);
+    if (!w || s.sandUp > 0) return false;
+    w.ammo--; s.sandUp = 2;
+    say(sc, `${s.name} throws a sand screen.`, 'info', feltBy(sc, s));
+    return true;
+}
+
+/** Sends out a drone that answers to sensors exactly as its parent does. */
+export function launchDecoy(sc, s) {
+    const w = s.weapons.find(x => x.id === 'decoydrone' && !x.out && x.ammo > 0);
+    if (!w || !isActive(s)) return false;
+    w.ammo--;
+    const off = (chance(0.5) ? 1 : -1) * (20 + rnd() * 25);
+    const d = makeShip('decoyship', { name: s.name, side: s.side, x: s.x + (rnd() - 0.5) * 40, y: s.y + (rnd() - 0.5) * 40, heading: s.heading, crewQ: 1, morale: 0 });
+    Object.assign(d, { mimic: s.id, sigAs: sizeOf(s).sig * 1.1, off, speed: s.speed, ttl: 14, radar: s.radar });
+    d.want = { heading: (s.want.heading + off + 360) % 360, throttle: s.want.throttle };
+    sc.ships.push(d);
+    if (s.side === 'ally') say(sc, `${s.name} launches a decoy drone.`, 'info', feltBy(sc, s));
+    return true;
+}
+
+/** Grapple lines: the two hulls are dragged together, the lighter one more. The held crew try to cut free. */
+function stepTethers(sc) {
+    if (!sc.tethers?.length) return;
+    for (const th of sc.tethers) {
+        const a = shipById(th.a, sc), b = shipById(th.b, sc);
+        th.ttl--;
+        const gone = (x) => !x || x.state === 'destroyed' || x.state === 'escaped';
+        if (gone(a) || gone(b) || !isActive(a)) { th.dead = true; continue; }
+        const ma = MASS[clsOf(a).size], mb = MASS[clsOf(b).size];
+        if (mb / ma > 12 && b.speed > 20) { th.dead = true; say(sc, `${b.name} tears the grapple line out of ${a.name} by sheer mass.`, 'info', feltBy(sc, a) || feltBy(sc, b)); continue; }
+        const playerCuts = b.id === sc.playerShip && (POSTS[sc.role]?.can ?? []).includes('engineering');
+        if (isActive(b) && (playerCuts ? b.cutting : true) && chance(0.15 + quality(sc, b, 'engineering') * 0.05)) {
+            th.dead = true; say(sc, `${b.name}'s crew cut the grapple line.`, b.side === 'ally' ? 'good' : 'warn', feltBy(sc, a) || feltBy(sc, b)); continue;
+        }
+        if (th.ttl <= 0) { th.dead = true; say(sc, `The grapple line between ${a.name} and ${b.name} parts.`, 'info', feltBy(sc, a) || feltBy(sc, b)); continue; }
+        const d = dist(a, b);
+        if (d > 40) {
+            const ux = (b.x - a.x) / d, uy = (b.y - a.y) / d, pull = d - 40;
+            a.x += ux * pull * mb / (ma + mb); a.y += uy * pull * mb / (ma + mb);
+            b.x -= ux * pull * ma / (ma + mb); b.y -= uy * pull * ma / (ma + mb);
+        }
+        a.speed *= 0.6; b.speed *= 0.5;
+    }
+    sc.tethers = sc.tethers.filter(t => !t.dead);
+    for (const s of sc.ships) if (s.cutting && !tetherOn(s, sc)) s.cutting = false;
+}
+
+/** Fire ships: a hull packed with explosives that only has to get close. They also cook off when shot. */
+function stepFireships(sc) {
+    for (const s of sc.ships) {
+        const fs = clsOf(s).fireship;
+        if (!fs || s.blown) continue;
+        let power = 0;
+        if (isActive(s) && sc.ships.some(o => o.side !== s.side && o.state !== 'destroyed' && o.state !== 'escaped' && !clsOf(o).decoy && clsOf(o).size >= 2 && dist(o, s) <= fs.blast * 0.6)) power = 1;
+        else if (s.state === 'destroyed') { s.blown = true; if (chance(0.5)) power = 0.5; }
+        if (!power) continue;
+        s.blown = true;
+        say(sc, `${s.name} ${power === 1 ? 'detonates: she was a fire ship' : 'goes up in a chain of secondary explosions: she was packed with charges'}.`, 'warn', true);
+        for (const o of sc.ships) {
+            if (o === s || o.state === 'destroyed' || o.state === 'escaped') continue;
+            const d = dist(o, s);
+            if (d > fs.blast) continue;
+            const r = damage(sc, o, fs.dmg * power * (1 - d / fs.blast * 0.6) * (0.85 + rnd() * 0.3), fs.pen, 'missile', s, '', { fire: 2 });
+            say(sc, `${o.name} is caught in the explosion: ${Math.round(r.dealt ?? 0)} hull.`, o.side === 'ally' ? 'bad' : 'good', true);
+        }
+        if (s.state !== 'destroyed') { s.state = 'destroyed'; s.hull = 0; }
+    }
+}
+
+export function layMine(sc, s) {
+    const w = s.weapons.find(x => x.id === 'mines' && !x.out && x.ammo > 0 && x.cd <= 0);
+    if (!w) return false;
+    w.ammo--; w.cd = 1;
+    sc.mines.push({ id: uid('mn'), side: s.side, x: s.x - Math.sin(rad(s.heading)) * 20, y: s.y + Math.cos(rad(s.heading)) * 20, armed: sc.pulse + 1, seen: { ally: s.side === 'ally', enemy: s.side === 'enemy' } });
+    if (feltBy(sc, s)) say(sc, `${s.name} lays a mine astern.`, 'info', true);
+    return true;
+}
+
+/** Mines wait for anything that is not on their layer's side. Sweepers find and clear them. */
+function stepMines(sc) {
+    const def = SC_WEAPONS.mines;
+    for (const s of sc.ships) {
+        if (!isActive(s) || !powered(s)) continue;
+        const sweep = s.weapons.find(w => w.id === 'sweeper' && !w.out && w.on);
+        const sw = SC_WEAPONS.sweeper;
+        const eye = sensorRange(s) * (sensorGrade(clsOf(s)) >= 3 ? 0.12 : 0.05);
+        for (const mn of sc.mines) {
+            if (mn.side === s.side || mn.dead) continue;
+            const d = dist(s, mn);
+            if (!mn.seen[s.side] && (d <= eye || (sweep && d <= sw.detect))) { mn.seen[s.side] = true; if (s.side === 'ally') say(sc, `Mine detected bearing ${Math.round(bearing(playerShip(sc) ?? s, mn)).toString().padStart(3, '0')}.`, 'warn'); }
+        }
+        if (sweep) {
+            const near = sc.mines.filter(mn => mn.side !== s.side && !mn.dead && mn.seen[s.side] && dist(s, mn) <= sw.range).sort((a, b) => dist(s, a) - dist(s, b))[0];
+            if (near && chance(0.5 + quality(sc, s, 'sensors') * 0.05)) { near.dead = true; say(sc, `${s.name} clears a mine.`, s.side === 'ally' ? 'good' : 'info', feltBy(sc, s)); }
+        }
+    }
+    for (const mn of sc.mines) {
+        if (mn.dead || sc.pulse < mn.armed) continue;
+        const t = sc.ships.find(s => s.side !== mn.side && s.state !== 'destroyed' && s.state !== 'escaped' && dist(s, mn) <= def.trigger);
+        if (!t) continue;
+        mn.dead = true;
+        // A crew that knows the mine is there and can still steer usually avoids it.
+        if (mn.seen[t.side] && isActive(t) && chance(0.6 + quality(sc, t, 'helm') * 0.04)) { say(sc, `${t.name} steers clear of a mine, which detonates harmlessly.`, 'info', feltBy(sc, t)); continue; }
+        const r = damage(sc, t, def.dmg * (0.8 + rnd() * 0.4), def.pen, 'missile', mn, '', { fire: 1.5 });
+        say(sc, `${t.name} strikes a mine: ${Math.round(r.dealt ?? 0)} hull.`, t.side === 'ally' ? 'bad' : 'good', true);
+    }
+    sc.mines = sc.mines.filter(mn => !mn.dead);
+}
+
+/** Ramming: mass times closing speed. Without a reinforced prow the rammer suffers as much as the target. */
+function stepRams(sc) {
+    for (const s of sc.ships) {
+        if (!s.ramming || !isActive(s) || clsOf(s).fireship) continue;
+        const t = shipById(s.ramming, sc);
+        if (!t || t.state === 'destroyed' || t.state === 'escaped') { s.ramming = null; continue; }
+        const d = dist(s, t);
+        if (d > Math.max(60, s.speed * 0.6) || Math.abs(angDiff(bearing(s, t), s.heading)) > 35) continue;
+        const c = clamp(45 + (turnRate(s) - turnRate(t)) * 0.3 + (s.speed - t.speed) * 0.15 + quality(sc, s, 'helm') * 4 - evasionOf(sc, t), 5, 92);
+        if (rnd() * 100 >= c) { say(sc, `${s.name} tries to ram ${t.name} (${c}%) and is evaded.`, 'info', feltBy(sc, s) || feltBy(sc, t)); continue; }
+        const closing = Math.max(20, s.speed + t.speed * Math.cos(rad(angDiff(t.heading, s.heading) + 180)));
+        const ms = MASS[clsOf(s).size], mt = MASS[clsOf(t).size];
+        const blow = ms * closing / 100 * 3.5;
+        const toTarget = damage(sc, t, blow, 13, 'ram', s, '', { room: 1.5, fire: 1.5 });
+        const toSelf = damage(sc, s, blow * clamp(mt / ms, 0.3, 2) * (clsOf(s).ram ? 0.2 : 1), clsOf(s).ram ? 6 : 13, 'ram', t, '', {});
+        s.speed *= 0.3; t.speed *= 0.6; s.ramming = null;
+        say(sc, `${s.name} rams ${t.name}: ${Math.round(toTarget.dealt ?? 0)} hull to her, ${Math.round(toSelf.dealt ?? 0)} to the rammer.`, s.side === 'ally' ? 'good' : 'bad', true);
+    }
 }
 
 /** How a boarding fight goes when nobody the player controls is in it: numbers and quality. */
@@ -848,8 +1112,9 @@ function aiBoarding(sc, s) {
         .sort((a, b) => dist(s, a) - dist(s, b))[0];
     if (!t || sc.missiles.some(m => m.wid === 'pod' && m.target === t.id)) return;
     if (feltBy(sc, t) && (sc.boardingPending || sc.boarding)) return;
-    const open = t.shield <= 0 || t.shieldDown > 0;
-    const crippled = t.state === 'disabled' || topSpeed(t) < clsOf(t).speed * 0.4 || t.hull < t.maxHull * 0.4;
+    const held = tetherOn(t, sc)?.a === s.id;
+    const open = held || t.shield <= 0 || t.shieldDown > 0;
+    const crippled = held || t.state === 'disabled' || topSpeed(t) < clsOf(t).speed * 0.4 || t.hull < t.maxHull * 0.4;
     if (!open) return;
     if (!(crippled || (cls.pirate && chance(0.35)) || chance(0.1))) return;
     const n = crippled ? Math.min(s.pods, 2) : 1;
@@ -888,14 +1153,17 @@ function stepMissiles(sc) {
         let seduced = 0;
         const logAt = sc.log.length;
         for (const m of list) {
-            if ((t.decoyUp > 0 && chance(0.4)) || (jam && chance(0.2))) { m.hp = 0; m.decoyed = true; seduced++; }
+            const hard = SC_WEAPONS[m.wid].nuclear; // inertial guidance: little for a decoy or a jammer to work on
+            if ((t.decoyUp > 0 && chance(hard ? 0.12 : 0.4)) || (jam && !hard && chance(0.2))) { m.hp = 0; m.decoyed = true; seduced++; }
         }
-        const live = list.filter(m => m.hp > 0);
+        // Point defence takes the nearest threats first, so a conventional salvo can screen a heavy warhead behind it.
+        const live = list.filter(m => m.hp > 0).sort((x, y) => (SC_WEAPONS[x.wid].nuclear ? 1 : 0) - (SC_WEAPONS[y.wid].nuclear ? 1 : 0));
         const shot = pointDefence(sc, t, live);
         let hits = 0, dealt = 0;
         for (const m of live.filter(x => x.hp > 0)) {
             const def = SC_WEAPONS[m.wid];
             const from = shipById(m.from, sc) ?? m;
+            if (def.nuclear) { hits++; dealt += nuclearBlast(sc, t, def, from); continue; }
             if (rnd() * 100 < clamp(88 - evasionOf(sc, t) * 0.8, 15, 95)) { hits++; dealt += damage(sc, t, def.dmg * (0.85 + rnd() * 0.3), def.pen, 'missile', from, '').dealt ?? 0; }
         }
         for (const m of list) m.dead = true;
@@ -967,6 +1235,12 @@ function upkeep(sc, s) {
     if (s.shieldDown > 0) s.shieldDown--;
     else if (powered(s) && s.maxShield && isActive(s)) s.shield = Math.min(s.maxShield * (0.3 + 0.7 * roomPct(s, 'shields')), s.shield + s.maxShield * 0.04 * pw.shd * roomPct(s, 'shields'));
     if (s.decoyUp > 0) s.decoyUp--;
+    if (s.sandUp > 0) s.sandUp--;
+    if (s.blind > 0) s.blind--;
+    if (s.mimic && isActive(s)) {
+        const parent = shipById(s.mimic, sc);
+        if (--s.ttl <= 0 || !parent || !isActive(parent)) { destroyShip(sc, s, ''); return; }
+    }
     // Fires
     for (const [id, r] of Object.entries(s.rooms)) {
         if (!r.fire) continue;
@@ -998,7 +1272,7 @@ function upkeep(sc, s) {
     if (s.warp !== null && isActive(s)) {
         if (!cls.warp || roomPct(s, 'jump') <= 0 || !powered(s)) { s.warp = null; if (felt) say(sc, 'The jump drive is not answering.', 'bad', true); }
         else {
-            s.warp--;
+            if (tetherOn(s, sc)) { if (felt) say(sc, 'The jump drive cannot engage with a grapple line in the hull.', 'bad', true); } else s.warp--;
             s.heat += cls.heat * 0.1;
             if (s.warp <= 0) {
                 s.state = 'escaped';
@@ -1023,7 +1297,7 @@ function checkEnd(sc) {
     if (!ps || ps.state === 'destroyed') return 'destroyed';
     if (ps.state === 'escaped') return 'escaped';
     if (ps.state === 'surrendered') return 'surrendered';
-    const foes = sc.ships.filter(s => s.side === 'enemy');
+    const foes = sc.ships.filter(s => s.side === 'enemy' && !clsOf(s).decoy);
     if (foes.every(s => !isActive(s))) return foes.every(s => s.state === 'escaped') ? 'enemy-withdrew' : 'victory';
     const friends = sc.ships.filter(s => s.side === 'ally' && isActive(s));
     if (ps.state === 'disabled' && friends.length === 0 && sc.pulse - (sc.disabledAt ?? (sc.disabledAt = sc.pulse)) >= 3) return 'disabled';
@@ -1059,6 +1333,7 @@ export function runPulse() {
     for (const s of sc.ships) {
         if (!isActive(s)) continue;
         const mine = s.id === sc.playerShip;
+        if (clsOf(s).decoy) { aiHelm(sc, s); continue; }
         aiMorale(sc, s);
         if (!isActive(s)) continue;
         if (!mine || !can.includes('helm')) aiHelm(sc, s);
@@ -1069,6 +1344,10 @@ export function runPulse() {
     }
     // 3. Movement, then the sensor picture.
     for (const s of sc.ships) moveShip(sc, s);
+    stepTethers(sc);
+    stepRams(sc);
+    stepFireships(sc);
+    stepMines(sc);
     updateTracks(sc);
     // 4. Guns and beams, missile launches, then missiles in flight and point defence.
     for (const s of sc.ships) fireShip(sc, s);
@@ -1166,8 +1445,8 @@ export function finishShipCombat(result) {
     sc.over = result;
     const ps = playerShip(sc);
     const cap = st.captain;
-    const foes = sc.ships.filter(s => s.side === 'enemy');
-    const friends = sc.ships.filter(s => s.side === 'ally' && !s.isPlayer);
+    const foes = sc.ships.filter(s => s.side === 'enemy' && !clsOf(s).decoy);
+    const friends = sc.ships.filter(s => s.side === 'ally' && !s.isPlayer && !clsOf(s).decoy);
     const victors = foes.filter(s => isActive(s));
     const lead = victors.sort((a, b) => clsOf(b).size - clsOf(a).size)[0];
     const kind = lead ? (clsOf(lead).pirate ? 'pirate' : clsOf(lead).lawful ? 'lawful' : 'military') : null;
@@ -1181,6 +1460,7 @@ export function finishShipCombat(result) {
     lines.push(`Own ship: ${describeShip(ps)}.`);
     if (friends.length) lines.push(`Friendly: ${friends.map(describeShip).join('; ')}.`);
     lines.push(`Hostile: ${foes.map(describeShip).join('; ')}.`);
+    if (sc.nukeBy) lines.push(`A nuclear weapon was used in this battle, launched by ${sc.nukeBy}. That will have consequences far beyond it.`);
     let fate = '';
     const lossOfShip = () => {
         if (sc.own) { st.ship = null; st.cargo = []; }
@@ -1240,7 +1520,7 @@ export function finishShipCombat(result) {
     if (can.includes('engineering') && sc.role !== 'pilot') give('engineering', Math.round(xp * 0.7));
     if (can.includes('command')) give('tactics', Math.round(xp * 0.7));
     if (can.includes('fleet')) give('leadership', Math.round(xp * 0.7));
-    const prizes = result === 'victory' ? foes.filter(s => s.state === 'disabled' || s.state === 'surrendered').map(s => ({ id: s.id, name: s.name, cls: s.cls, state: s.state, crew: Math.max(0, clsOf(s).crew - s.casualties), done: false })) : [];
+    const prizes = result === 'victory' ? foes.filter(s => (s.state === 'disabled' || s.state === 'surrendered') && !clsOf(s).machine).map(s => ({ id: s.id, name: s.name, cls: s.cls, state: s.state, crew: Math.max(0, clsOf(s).crew - s.casualties), done: false })) : [];
     if (prizes.length) lines.push(`Enemy vessels at the mercy of ${can.includes('command') ? cap.name : ps.name}: ${prizes.map(p => `${p.name} (${p.state})`).join(', ')}. They can be boarded, salvaged or left.`);
     const report = {
         result, scene: sc.scene, pulses: sc.pulse, role: sc.role, lines, prizes,

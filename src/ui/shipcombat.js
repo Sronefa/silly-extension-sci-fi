@@ -5,12 +5,12 @@ import { registerTab, registerWidget, registerActions, gauge, btn, openHud, redr
 import { S, commit, onChange, addLog } from '../core/state.js';
 import { toast, ctx, settings } from '../core/st.js';
 import { esc, clamp, fmtInt } from '../core/util.js';
-import { SIZES, SC_WEAPONS, ARC_NAMES, ROOMS, VESSELS, POSTS, THROTTLES, POWER_PRESETS, TRACK_NAMES, PULSE_SECONDS, sensorGrade, GRADE_NAMES } from '../data/vessels.js';
+import { SIZES, SC_WEAPONS, ARC_NAMES, ROOMS, VESSELS, POSTS, THROTTLES, POWER_PRESETS, TRACK_NAMES, PULSE_SECONDS, sensorGrade, GRADE_NAMES, LOADS, loadsFor } from '../data/vessels.js';
 import {
     SC, clsOf, sizeOf, shipById, playerShip, isActive, dist, bearing, angDiff, playerPost, clearance, resolveClass,
     startShipCombatFromTokens, runPulse, order, pendingOrders, weaponBlock, hitChance, orderSeconds, quality, joinBoardingDefence, dcTeams, autoDc,
     topSpeed, sensorRange, signature, roomPct, warpSpool, playerSurrender, abandonShip, demandSurrender, setFleetOrder,
-    abortShipCombat, salvagePrize,
+    abortShipCombat, salvagePrize, tetherOn, masked, shownAs,
 } from '../systems/shipcombat.js';
 import { startCombat, parseEnemies } from '../systems/combat.js';
 import { registerCommand } from '../systems/sim.js';
@@ -29,17 +29,21 @@ const rating = (q) => (q >= 7 ? 'superb' : q >= 5 ? 'sharp' : q >= 3 ? 'competen
 // ---- The plot ---------------------------------------------------------------------------
 
 function glyph(s, level, mine, sel, k) {
-    const size = sizeOf(s).draw * k;
+    const sc = SC();
     const foe = s.side === 'enemy';
+    // A decoy drone the sensors have not seen through is drawn exactly like the ship it copies.
+    const fake = foe && masked(sc, 'ally', s);
+    const src = fake ? (shipById(s.mimic, sc) ?? s) : s;
+    const size = SIZES[(foe ? shownAs(sc, 'ally', s) : clsOf(s)).size].draw * k * (!foe && s.mimic ? 0.5 : 1);
     const cls = `sf-ship ${foe ? 'foe' : 'friend'}${mine ? ' own' : ''}${sel ? ' sel' : ''} st-${s.state}`;
     const attr = foe ? ` data-sf="sc-target" data-id="${s.id}"` : (mine ? '' : ` data-sf="sc-ally" data-id="${s.id}"`);
     if (foe && level === 1) {
         return `<g class="${cls} blip"${attr} transform="translate(${s.x.toFixed(1)} ${s.y.toFixed(1)})"><rect x="${-6 * k}" y="${-6 * k}" width="${12 * k}" height="${12 * k}" transform="rotate(45)"/><text y="${4 * k}" font-size="${10 * k}">?</text><circle class="hit" r="${18 * k}"/></g>`;
     }
-    const label = foe && level === 2 ? (SC()?.misid?.[s.id] ?? clsOf(s).role) : s.name;
-    const hull = !foe || level >= 3 ? ` ${Math.max(0, Math.round(100 * s.hull / s.maxHull))}%` : '';
+    const label = foe && level === 2 ? (sc?.misid?.[s.id] ?? shownAs(sc, 'ally', s).role) : !foe && s.mimic ? 'decoy' : foe && s.mimic && !fake ? 'decoy drone' : s.name;
+    const hull = (!foe && !s.mimic) || (foe && level >= 3) ? ` ${Math.max(0, Math.round(100 * src.hull / src.maxHull))}%` : '';
     return `<g class="${cls}"${attr} transform="translate(${s.x.toFixed(1)} ${s.y.toFixed(1)})">
-        ${mine ? `<circle class="ring" r="${size * 1.5}"/>` : ''}${sel ? `<circle class="reticle" r="${size * 1.7}"/>` : ''}
+        ${s.sandUp > 0 ? `<circle class="sand" r="${size * 2.2}"/>` : ''}${mine ? `<circle class="ring" r="${size * 1.5}"/>` : ''}${sel ? `<circle class="reticle" r="${size * 1.7}"/>` : ''}
         <g transform="rotate(${s.heading.toFixed(0)})"><path d="M0 ${-size} L${size * 0.62} ${size * 0.8} L0 ${size * 0.45} L${-size * 0.62} ${size * 0.8} Z"/>${isActive(s) ? `<line x1="0" y1="${-size}" x2="0" y2="${-size - clamp(s.speed, 0, 300) * 0.5 - 6 * k}"/>` : ''}</g>
         <text y="${size + 15 * k}" font-size="${12 * k}">${esc(label)}${hull}</text><circle class="hit" r="${Math.max(size * 1.4, 16 * k)}"/></g>`;
 }
@@ -47,7 +51,7 @@ function glyph(s, level, mine, sel, k) {
 function plotSvg(sc) {
     const ps = playerShip(sc);
     const tracks = sc.tracks.ally;
-    const shown = sc.ships.filter(s => s.state !== 'escaped' && (s.side === 'ally' || (tracks[s.id] ?? 0) >= 1));
+    const shown = sc.ships.filter(s => s.state !== 'escaped' && !(s.mimic && !isActive(s)) && (s.side === 'ally' || (tracks[s.id] ?? 0) >= 1));
     const pts = [...shown, ...(sc.ghosts ?? [])];
     const xs = pts.map(s => s.x), ys = pts.map(s => s.y);
     let minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
@@ -61,7 +65,7 @@ function plotSvg(sc) {
     for (let y = Math.ceil(vb[1] / step) * step; y < vb[1] + span; y += step) grid += `<line x1="${vb[0]}" y1="${y}" x2="${vb[0] + span}" y2="${y}"/>`;
     let rings = '';
     if (ps && isActive(ps)) {
-        const guns = ps.weapons.filter(w => !w.out && ['kinetic', 'beam'].includes(SC_WEAPONS[w.id].kind) && !SC_WEAPONS[w.id].melee).map(w => SC_WEAPONS[w.id].range);
+        const guns = ps.weapons.filter(w => !w.out && ['kinetic', 'beam', 'plasma'].includes(SC_WEAPONS[w.id].kind) && !SC_WEAPONS[w.id].melee).map(w => SC_WEAPONS[w.id].range);
         if (can('weapons', sc) && guns.length) rings += `<circle class="rng gun" cx="${ps.x}" cy="${ps.y}" r="${Math.max(...guns)}"/>`;
         if (can('sensors', sc)) rings += `<circle class="rng sens" cx="${ps.x}" cy="${ps.y}" r="${sensorRange(ps)}"/>`;
         const r = span * 0.42;
@@ -78,8 +82,11 @@ function plotSvg(sc) {
     const ships = shown.sort((a, b) => (a.id === sc.playerShip) - (b.id === sc.playerShip))
         .map(s => glyph(s, s.side === 'ally' ? 3 : tracks[s.id] ?? 0, s.id === sc.playerShip, ps?.target === s.id, k)).join('');
     const ghosts = (sc.ghosts ?? []).map(g => `<g class="sf-ship foe blip" transform="translate(${g.x.toFixed(1)} ${g.y.toFixed(1)})"><rect x="${-6 * k}" y="${-6 * k}" width="${12 * k}" height="${12 * k}" transform="rotate(45)"/><text y="${4 * k}" font-size="${10 * k}">?</text></g>`).join('');
+    const mines = (sc.mines ?? []).filter(mn => mn.seen.ally).map(mn => `<rect class="mine ${mn.side === 'ally' ? 'friend' : 'foe'}" x="${(mn.x - 4 * k).toFixed(1)}" y="${(mn.y - 4 * k).toFixed(1)}" width="${8 * k}" height="${8 * k}" transform="rotate(45 ${mn.x.toFixed(1)} ${mn.y.toFixed(1)})"/>`).join('');
+    const tethers = (sc.tethers ?? []).map(th => [shipById(th.a, sc), shipById(th.b, sc)]).filter(([a, b]) => a && b && (a.side === 'ally' || (tracks[a.id] ?? 0) >= 2))
+        .map(([a, b]) => `<line class="tether" x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}"/>`).join('');
     return `<svg class="sf-plot" viewBox="${vb.map(n => n.toFixed(0)).join(' ')}" data-sf="sc-plot" style="--k:${k.toFixed(2)}">
-        <g class="grid">${grid}</g>${rings}${missiles}${ghosts}${ships}</svg>
+        <g class="grid">${grid}</g>${rings}${mines}${tethers}${missiles}${ghosts}${ships}</svg>
         <div class="sf-field-legend"><span>grid ${fmtInt(step)} km</span><span><i class="l-ally"></i>friendly</span><span><i class="l-foe"></i>hostile</span>${can('helm', sc) ? '<span>tap the plot to set a course</span>' : ''}</div>`;
 }
 
@@ -118,14 +125,16 @@ function helmHtml(st, sc) {
             ${btn('sc-course', 'Open the range', { icon: 'fa-up-right-from-square', data: { m: 'open' }, disabled: off(ok && t) })}
         </div>
         <div class="sf-seg">${THROTTLES.map(th => `<button type="button" class="sf-btn${ps.want.throttle === th.id ? ' primary' : ''}${pendingOrders(ps, ['throttle'])[0]?.value === th.id ? ' queued' : ''}" data-sf="sc-throttle" data-v="${th.id}"${ok ? '' : ' disabled'}>${esc(th.name)}</button>`).join('')}</div>
-        <div class="sf-actions">${btn('sc-evasive', ps.evasive ? 'Evasive: on' : 'Evasive manoeuvres', { icon: 'fa-shuffle', cls: ps.evasive ? 'primary' : '', disabled: off(ok), title: 'Harder to hit, and your own gunnery suffers' })}</div>`;
+        <div class="sf-actions">${btn('sc-evasive', ps.evasive ? 'Evasive: on' : 'Evasive manoeuvres', { icon: 'fa-shuffle', cls: ps.evasive ? 'primary' : '', disabled: off(ok), title: 'Harder to hit, and your own gunnery suffers' })}
+            ${clsOf(ps).size > 1 || clsOf(ps).mech ? btn('sc-ram', ps.ramming ? `Ramming ${shipById(ps.ramming, sc)?.name ?? ''}: belay` : 'Ram the target', { icon: 'fa-angles-right', cls: ps.ramming ? 'primary' : 'ghost', disabled: off(ok && (t || ps.ramming)), title: clsOf(ps).ram ? 'Reinforced prow: built for this. Steer onto her at speed.' : 'No reinforced prow: your own ship will suffer about as much as theirs. You must steer onto her at speed.' }) : ''}</div>
+        ${ps.ramming ? '<small class="sf-warn-line">Collision course ordered. She strikes if you close within about 60 km, bow on.</small>' : ''}`;
 }
 
 function weaponsHtml(st, sc) {
     const ps = playerShip(sc);
     const ok = live(sc);
     const tracks = sc.tracks.ally;
-    const foes = sc.ships.filter(s => s.side === 'enemy' && isActive(s) && (tracks[s.id] ?? 0) >= 1);
+    const foes = sc.ships.filter(s => s.side === 'enemy' && isActive(s) && (tracks[s.id] ?? 0) >= 1 && !(s.mimic && !masked(sc, 'ally', s)));
     const t = shipById(ps.target, sc);
     const qT = pendingOrders(ps, ['target'])[0];
     const groups = new Map();
@@ -134,17 +143,25 @@ function weaponsHtml(st, sc) {
         const def = SC_WEAPONS[list[0].id];
         const up = list.filter(w => !w.out);
         const w = up[0] ?? list[0];
-        const blocked = up.length ? (def.kind === 'pd' ? '' : weaponBlock(sc, ps, w, t && isActive(t) ? t : null)) : 'destroyed';
-        const ammo = list[0].ammo !== null ? ` · ${up.reduce((n, x) => n + x.ammo, 0)} ${def.kind === 'missile' ? 'missiles' : 'salvos'}` : '';
-        const status = def.kind === 'pd' ? 'automatic' : blocked || (def.kind === 'missile' ? 'ready' : `${hitChance(sc, ps, w, t)}% to hit`);
+        const auto = { pd: 'automatic', sweeper: 'automatic: finds and clears mines nearby', sand: 'countermeasure: thrown from the sensor console', decoy: 'countermeasure: launched from the sensor console', mine: 'laid astern on your order' }[def.kind];
+        const blocked = up.length ? (auto ? '' : weaponBlock(sc, ps, w, t && isActive(t) ? t : null)) : 'destroyed';
+        const unit = { missile: 'missiles', drone: 'drones', decoy: 'drones', mine: 'mines', grapple: 'harpoons', sand: 'canisters' }[def.kind] ?? 'salvos';
+        const ammo = list[0].ammo !== null ? ` · ${up.reduce((n, x) => n + x.ammo, 0)} ${unit}` : '';
+        const status = auto ?? (blocked || (def.kind === 'missile' ? 'ready' : def.kind === 'drone' ? 'ready to launch' : def.kind === 'grapple' ? `${hitChance(sc, ps, w, t)}% to take hold` : `${hitChance(sc, ps, w, t)}% to hit`));
+        const loads = loadsFor(def);
+        const qLoad = pendingOrders(ps, ['load']).find(o => o.value.id === list[0].id && o.value.arc === list[0].arc)?.value.load;
+        const loadSeg = loads.length > 1 ? `<div class="sf-seg sf-loads">${loads.map(l => `<button type="button" class="sf-btn${w.load === l.id ? ' primary' : ''}${qLoad === l.id ? ' queued' : ''}" data-sf="sc-load" data-key="${list[0].id}:${list[0].arc}" data-v="${l.id}" title="${esc(l.full)}"${ok && up.length ? '' : ' disabled'}>${esc(l.name)}</button>`).join('')}</div>` : '';
+        const toggle = def.kind === 'mine' ? btn('sc-mine', 'Lay', { icon: 'fa-circle-dot', data: {}, disabled: off(ok && up.some(x => x.ammo > 0)) })
+            : def.nuclear ? btn('sc-nuke', w.on ? 'ARMED' : 'Safe', { icon: 'fa-radiation', cls: w.on ? 'primary' : 'ghost', data: { key: `${list[0].id}:${list[0].arc}` }, disabled: off(ok && up.length && can('command', sc)), title: 'Nuclear release needs the commanding officer' })
+                : ['sweeper', 'sand', 'decoy'].includes(def.kind) ? '' : null;
         return `<li class="sf-row sf-wpn${blocked ? ' blocked' : ''}${w.on ? '' : ' off'}"><span class="sf-grow"><b>${esc(def.name)}</b>${list.length > 1 ? ` ×${up.length}${up.length < list.length ? `/${list.length}` : ''}` : ''}
-            <small class="sf-dim">${ARC_NAMES[list[0].arc]} · ${fmtInt(def.range)} km${ammo}</small><br><small class="${blocked ? 'sf-warn-line' : 'sf-ok-line'}">${esc(status)}</small></span>
-            ${btn('sc-weapon', w.on ? 'Free' : 'Held', { cls: w.on ? 'primary' : 'ghost', data: { key: `${list[0].id}:${list[0].arc}` }, disabled: off(ok && up.length) })}</li>`;
+            <small class="sf-dim">${def.range ? `${ARC_NAMES[list[0].arc]} · ${fmtInt(def.range)} km` : ''}${def.range ? ammo : ammo.replace(' · ', '')}</small><br><small class="${blocked ? 'sf-warn-line' : 'sf-ok-line'}">${esc(status)}</small>${loadSeg}</span>
+            ${toggle ?? btn('sc-weapon', w.on ? 'Free' : 'Held', { cls: w.on ? 'primary' : 'ghost', data: { key: `${list[0].id}:${list[0].arc}` }, disabled: off(ok && up.length) })}</li>`;
     }).join('');
     const d = orderSeconds(sc, ps, 'weapons');
     return `${clsOf(ps).size > 1 ? `<small class="sf-dim">${sc.role === 'gunnery' ? 'You work the solutions yourself: fire orders take effect' : `Your gunnery officer is ${rating(ps.officers.weapons)}: fire orders take effect`} ${secs(d)}.</small>` : ''}
         <label class="sf-field"><span>Target</span><select class="sf-input" data-sf-change="sc-target-sel"${ok ? '' : ' disabled'}>
-            <option value="">No target</option>${foes.map(f => `<option value="${f.id}"${f.id === (qT?.value ?? ps.target) ? ' selected' : ''}>${esc((tracks[f.id] ?? 0) >= 3 ? f.name : (tracks[f.id] ?? 0) >= 2 ? (sc.misid?.[f.id] ?? clsOf(f).role) : 'Unknown contact')} · ${fmtInt(dist(ps, f))} km · ${esc(TRACK_NAMES[tracks[f.id] ?? 0].toLowerCase())}</option>`).join('')}</select></label>
+            <option value="">No target</option>${foes.map(f => `<option value="${f.id}"${f.id === (qT?.value ?? ps.target) ? ' selected' : ''}>${esc((tracks[f.id] ?? 0) >= 3 ? f.name : (tracks[f.id] ?? 0) >= 2 ? (sc.misid?.[f.id] ?? shownAs(sc, 'ally', f).role) : 'Unknown contact')} · ${fmtInt(dist(ps, f))} km · ${esc(TRACK_NAMES[tracks[f.id] ?? 0].toLowerCase())}</option>`).join('')}</select></label>
         ${qT ? `<div class="sf-note">Target change in ${clock(qT.at - sc.pulse)}.</div>` : ''}
         <label class="sf-field"><span>Aim for</span><select class="sf-input" data-sf-change="sc-called"${ok ? '' : ' disabled'}>
             ${[['', 'Centre of mass'], ['drives', 'Drives'], ['weapons', 'Weapon mounts'], ['reactor', 'Reactor'], ['sensors', 'Sensor array'], ['bridge', 'Bridge'], ['shields', 'Shield emitters']].map(([v, n]) => `<option value="${v}"${ps.called === v ? ' selected' : ''}>${n}${v ? ' (harder)' : ''}</option>`).join('')}</select></label>
@@ -172,6 +189,8 @@ function engineeringHtml(st, sc) {
             ${btn('sc-overload', ps.overload ? 'Overload armed' : 'Overload reactor', { icon: 'fa-bolt', cls: ps.overload ? 'primary' : '', disabled: off(live(sc)), title: 'One pulse of extra power to everything. A lot of heat, and it can start a reactor fire.' })}
             ${cls.warp ? btn('sc-warp', ps.warp !== null ? `Abort jump (${clock(ps.warp)})` : 'Emergency jump', { icon: 'fa-explosion', cls: ps.warp !== null ? 'primary' : '', disabled: off(live(sc) && can('command', sc)), title: `Spools for ${clock(warpSpool(ps))}. A blind jump can leave you stranded.` }) : ''}
         </div>
+        ${tetherOn(ps, sc) ? `<div class="sf-check-result fail"><b>GRAPPLED</b><small>${esc(shipById(tetherOn(ps, sc).a, sc)?.name ?? 'An enemy')} has a line in the hull. No jump, and the ship can barely manoeuvre.</small></div>
+            <div class="sf-actions">${btn('sc-cut', ps.cutting ? 'Cutting party at work' : 'Cut the line', { icon: 'fa-scissors', cls: 'primary', disabled: off(ok && !ps.cutting) })}</div>` : ''}
         <div class="sf-sub">Compartments${teams ? ` · ${ps.dc.length}/${teams} repair teams assigned` : ' · no repair teams aboard'}</div>
         <div class="sf-rooms">${rooms}${out ? `<div class="sf-room${ps.dc.includes('weapons') ? ' dc' : ''}" data-sf="sc-dc" data-id="weapons"><span>${out} weapon${out > 1 ? 's' : ''} out${ps.dc.includes('weapons') ? ' <i class="fa-solid fa-wrench"></i>' : ''}</span></div>` : ''}</div>
         ${teams ? `<div class="sf-actions">${btn('sc-dc-auto', ps.dcManual ? 'Let the chief decide' : 'Chief engineer decides', { icon: 'fa-user-gear', cls: ps.dcManual ? '' : 'primary' })}</div>` : ''}
@@ -185,29 +204,38 @@ function sensorsHtml(st, sc) {
     const sig = signature(ps) / sizeOf(ps).sig;
     const loud = sig < 0.6 ? 'running dark' : sig < 1.2 ? 'quiet' : sig < 1.9 ? 'visible' : 'lit up like a beacon';
     const seen = sc.tracks.enemy[ps.id] ?? 0;
-    const rows = sc.ships.filter(s => s.side === 'enemy' && s.state !== 'escaped' && (tracks[s.id] ?? 0) >= 1).map(s => {
+    const rows = sc.ships.filter(s => s.side === 'enemy' && s.state !== 'escaped' && !(s.mimic && !isActive(s)) && (tracks[s.id] ?? 0) >= 1).map(s => {
         const l = tracks[s.id];
-        return `<li class="sf-row" data-sf="sc-target" data-id="${s.id}"><span class="sf-grow"><b>${esc(l >= 2 ? (l >= 3 ? s.name : (sc.misid?.[s.id] ?? clsOf(s).role)) : 'Unknown contact')}</b>
-            <small class="sf-dim">bearing ${deg(bearing(ps, s))} · ${fmtInt(dist(ps, s))} km${l >= 3 ? ` · ${esc(SIZES[clsOf(s).size].name.toLowerCase())}` : ''}${l >= 3 ? ` · hull ${Math.max(0, Math.round(100 * s.hull / s.maxHull))}%${s.shield > 0 ? ', shields up' : ', shields down'}${s.state !== 'active' ? `, ${s.state}` : ''}` : ''}</small></span>
+        const fake = masked(sc, 'ally', s);
+        const src = fake ? (shipById(s.mimic, sc) ?? s) : s; // an unexposed decoy reads exactly like its parent
+        const as = shownAs(sc, 'ally', s);
+        return `<li class="sf-row" data-sf="sc-target" data-id="${s.id}"><span class="sf-grow"><b>${esc(l >= 2 ? (l >= 3 ? (s.mimic && !fake ? `Decoy drone (${s.name})` : s.name) : (sc.misid?.[s.id] ?? as.role)) : 'Unknown contact')}</b>
+            <small class="sf-dim">bearing ${deg(bearing(ps, s))} · ${fmtInt(dist(ps, s))} km${l >= 3 ? ` · ${esc(SIZES[as.size].name.toLowerCase())}` : ''}${l >= 3 ? ` · hull ${Math.max(0, Math.round(100 * src.hull / src.maxHull))}%${src.shield > 0 ? ', shields up' : ', shields down'}${s.sandUp > 0 ? ', behind a sand screen' : ''}${s.state !== 'active' ? `, ${s.state}` : ''}` : ''}</small></span>
             <span class="sf-tag t${l}">${esc(TRACK_NAMES[l])}</span></li>`;
     }).join('');
     const inbound = sc.missiles.filter(m => m.side === 'enemy' && m.target === ps.id).length;
     const ghostRows = (sc.ghosts ?? []).map(g => `<li class="sf-row"><span class="sf-grow"><b>Unknown contact</b> <small class="sf-dim">bearing ${deg(bearing(ps, g))} · ${fmtInt(dist(ps, g))} km</small></span><span class="sf-tag t1">${esc(TRACK_NAMES[1])}</span></li>`).join('');
     const grade = sensorGrade(clsOf(ps));
+    const count = (id) => ps.weapons.filter(w => w.id === id && !w.out).reduce((n, w) => n + w.ammo, 0);
+    const sand = ps.weapons.some(w => w.id === 'sandcaster'), sandN = count('sandcaster');
+    const drones = ps.weapons.some(w => w.id === 'decoydrone'), droneN = count('decoydrone');
     return `<small class="sf-dim">${esc(GRADE_NAMES[grade][0].toUpperCase() + GRADE_NAMES[grade].slice(1))} sensor suite${grade <= 2 ? ': expect false contacts and wrong identifications' : ''}. Your ship is ${loud}. ${seen >= 3 ? 'The enemy has a firing solution on you.' : seen === 2 ? 'The enemy has you classified.' : seen === 1 ? 'The enemy has a faint contact on you.' : 'The enemy does not appear to see you.'}</small>
         ${inbound ? `<div class="sf-check-result fail"><b>VAMPIRE</b><small>${inbound} missile${inbound > 1 ? 's' : ''} inbound</small></div>` : ''}
         <div class="sf-actions">
             ${btn('sc-radar', ps.radar ? 'Radar: active' : 'Radar: silent', { icon: 'fa-satellite-dish', cls: ps.radar ? 'primary' : '', disabled: off(ok), title: 'Active radar sees far and is seen from farther' })}
             ${clsOf(ps).jammer ? btn('sc-jam', ps.jam ? 'Jammer: on' : 'Jammer: off', { icon: 'fa-tower-broadcast', cls: ps.jam ? 'primary' : '', disabled: off(ok), title: 'Degrades enemy tracks on ships near you. They will know something is out here.' }) : ''}
             ${btn('sc-decoy', ps.decoyUp > 0 ? 'Decoys out' : `Decoys (${ps.decoys})`, { icon: 'fa-burst', disabled: off(ok && ps.decoys > 0 && ps.decoyUp <= 0), title: 'Seduces incoming missiles for the next minute' })}
+            ${sand ? btn('sc-sand', ps.sandUp > 0 ? 'Sand screen up' : `Sand screen (${sandN})`, { icon: 'fa-cloud', disabled: off(ok && sandN > 0 && !(ps.sandUp > 0)), title: 'Beams lose most of their bite against you for a minute. Your own beams suffer too.' }) : ''}
+            ${drones ? btn('sc-decoydrone', `Decoy drone (${droneN})`, { icon: 'fa-clone', disabled: off(ok && droneN > 0), title: 'A drone that answers to sensors as your ship does. Good sensors see through it up close.' }) : ''}
         </div>
+        ${ps.blind > 0 ? '<div class="sf-check-result fail"><b>SENSORS WHITED OUT</b><small>The pulse of a nuclear detonation. Recovering.</small></div>' : ''}
         <ul class="sf-list">${rows + ghostRows || '<li class="sf-dim">No contacts.</li>'}</ul>`;
 }
 
 function commandHtml(st, sc) {
     const ps = playerShip(sc);
     const ok = live(sc);
-    const allies = sc.ships.filter(s => s.side === 'ally' && !s.isPlayer && s.state !== 'escaped');
+    const allies = sc.ships.filter(s => s.side === 'ally' && !s.isPlayer && s.state !== 'escaped' && !s.mimic);
     const foes = sc.ships.filter(s => s.side === 'enemy' && isActive(s) && (sc.tracks.ally[s.id] ?? 0) >= 2);
     const fleet = can('fleet', sc) && allies.length ? `<div class="sf-sub">Strike force</div><ul class="sf-list">${allies.map(a => {
         const cur = pendingOrders(a, ['fleet'])[0]?.value ?? a.fleet;
@@ -299,7 +327,7 @@ export function initShipCombatUi() {
     registerWidget({
         id: 'scstart', when: (st) => !st.shipCombat && !st.combat && clearance(st) >= 0, title: () => 'Stage a space battle',
         render: () => `<small class="sf-dim">The AI starts battles with a tag. Use this to stage one yourself.</small>
-            <div class="sf-check-form"><select class="sf-input" data-scs="cls">${Object.values(VESSELS).map(v => `<option value="${v.id}"${v.id === 'raider' ? ' selected' : ''}>${esc(v.name)}</option>`).join('')}</select>
+            <div class="sf-check-form"><select class="sf-input" data-scs="cls">${Object.values(VESSELS).filter(v => !v.decoy).map(v => `<option value="${v.id}"${v.id === 'raider' ? ' selected' : ''}>${esc(v.name)}</option>`).join('')}</select>
             <select class="sf-input" data-scs="n">${[1, 2, 3, 4, 6].map(n => `<option>${n}</option>`).join('')}</select></div>
             <div class="sf-actions">${btn('sc-start', 'Start battle', { icon: 'fa-rocket', cls: 'primary' })}</div>`,
     });
@@ -355,6 +383,20 @@ export function initShipCombatUi() {
             const list = ps.weapons.filter(w => w.id === id && w.arc === arc);
             const on = !list[0].on;
             act(() => { let d = 0; for (const w of list) d = order(ps, 'weapon', { n: w.n, on }); told(d, 'Fire order'); });
+        },
+        'sc-load'(el) { const ps = me(); const [id, arc] = el.dataset.key.split(':'); act(() => told(order(ps, 'load', { id, arc, load: el.dataset.v }), `Reload with ${LOADS[el.dataset.v].full.toLowerCase()}`)); },
+        'sc-mine'() { act(() => told(order(me(), 'mine', true), 'Mine')); },
+        'sc-ram'() { const ps = me(); act(() => told(order(ps, 'ram', ps.ramming ? null : ps.target), ps.ramming ? 'Belay ramming' : 'Ramming order')); },
+        'sc-sand'() { act(() => told(order(me(), 'sand', true), 'Sand screen')); },
+        'sc-decoydrone'() { act(() => told(order(me(), 'decoydrone', true), 'Decoy drone')); },
+        'sc-cut'() { act(() => told(order(me(), 'cut', true), 'Cutting party')); },
+        async 'sc-nuke'(el) {
+            const ps = me();
+            const [id, arc] = el.dataset.key.split(':');
+            const list = ps.weapons.filter(w => w.id === id && w.arc === arc);
+            const on = !list[0].on;
+            if (on && !(await confirmAsk('Release nuclear weapons?', 'The torpedo fires at your current target as soon as it bears. Everything near the blast suffers, friend or foe, and nobody forgets who used one.'))) return;
+            act(() => { let d = 0; for (const w of list) d = order(ps, 'weapon', { n: w.n, on }); told(d, on ? 'Nuclear release' : 'Weapon safed'); });
         },
         'sc-missiles'() { const ps = me(); act(() => told(order(ps, 'missiles', !ps.missiles), 'Fire order')); },
         'sc-power'(el) { act(() => told(order(me(), 'power', el.dataset.v), 'Power change')); },
