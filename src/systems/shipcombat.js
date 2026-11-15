@@ -8,6 +8,7 @@ import { startCombat, parseEnemies } from './combat.js';
 import { skillOf, gainXp, skillCheck } from './character.js';
 import { applyHit, randomPart, isDead } from './body.js';
 import { advanceTime, killPlayer } from './sim.js';
+import { effectiveClass } from './refit.js';
 
 const rnd = Math.random;
 const chance = (p) => rnd() < p;
@@ -15,7 +16,8 @@ const pickOne = (arr) => arr[Math.floor(rnd() * arr.length)];
 const rad = (d) => d * Math.PI / 180;
 
 export const SC = () => S()?.shipCombat ?? null;
-export const clsOf = (s) => VESSELS[s.cls];
+/** A ship's class. The player's own refitted ship carries its own copy. */
+export const clsOf = (s) => s.own ?? VESSELS[s.cls];
 export const sizeOf = (s) => SIZES[clsOf(s).size];
 export const shipById = (id, sc = SC()) => sc?.ships.find(s => s.id === id) ?? null;
 export const playerShip = (sc = SC()) => shipById(sc?.playerShip, sc);
@@ -71,7 +73,7 @@ export function may(domain, sc = SC()) {
 // ---------------------------------------------------------------------------------------
 
 function makeShip(classId, { name, side, x, y, heading, crewQ = 3, morale = 0.5 }) {
-    const cls = VESSELS[classId];
+    const cls = typeof classId === 'object' ? classId : VESSELS[classId];
     const rooms = {};
     for (const id of cls.rooms) {
         const max = Math.round(cls.hull * ROOMS[id].share * 0.6) + 10;
@@ -87,7 +89,7 @@ function makeShip(classId, { name, side, x, y, heading, crewQ = 3, morale = 0.5 
         state: 'active', warp: null, fleet: null, hot: false, lostFor: 0,
         // The officers at each station. How good they are decides how fast and how well orders are carried out.
         officers: Object.fromEntries(['helm', 'weapons', 'sensors', 'engineering'].map(d => [d, clamp(crewQ + Math.floor(rnd() * 3) - 1, 1, 8)])),
-        pods: boardingPods(cls),
+        pods: boardingPods(cls) + (cls.extraPods ?? 0), ...(cls.custom ? { own: cls } : {}),
     };
 }
 
@@ -124,8 +126,8 @@ export function startShipCombat({ scene = 'Open space', enemy = [], ally = [], a
     if (!post) post = { role: 'passenger', shipName: 'the transport', classId: 'liner', own: false };
     const sep = ambush ? 420 : surprise ? 900 : 1700;
     const ships = [];
-    const pcls = VESSELS[post.classId] ?? VESSELS.mule;
-    const me = makeShip(pcls.id, { name: post.shipName, side: 'ally', x: 0, y: sep / 2, heading: 0, crewQ: 3, morale: 0.2 });
+    const pcls = (post.own && st.ship ? effectiveClass(st) : null) ?? VESSELS[post.classId] ?? VESSELS.mule;
+    const me = makeShip(pcls.custom ? pcls : pcls.id, { name: post.shipName, side: 'ally', x: 0, y: sep / 2, heading: 0, crewQ: 3, morale: 0.2 });
     me.isPlayer = true;
     if (post.own && st.ship) {
         // The player's own ship arrives in whatever state it is really in.
@@ -207,7 +209,7 @@ export const turnRate = (s) => (powered(s) ? sizeOf(s).turn * (roomPct(s, 'drive
 export const sensorRange = (s) => (powered(s) ? clsOf(s).sensors * (0.15 + 0.85 * roomPct(s, 'sensors')) * (s.radar ? 1 : 0.4) * (s.blind > 0 ? 0.25 : 1) : 0);
 export function signature(s) {
     const t = s.want.throttle;
-    let sig = s.sigAs ?? sizeOf(s).sig;
+    let sig = (s.sigAs ?? sizeOf(s).sig) * (clsOf(s).sigMult ?? 1);
     sig *= s.radar ? 1.4 : 1;
     sig *= t >= 4 ? 1.5 : t >= 3 ? 1.25 : t <= 1 ? 0.75 : 1;
     sig *= 1 + 0.6 * clamp(s.heat / clsOf(s).heat, 0, 1.2);
@@ -218,7 +220,7 @@ export function signature(s) {
 }
 export const dcTeams = (s) => Math.max(0, sizeOf(s).dcTeams + (clsOf(s).dcBonus ?? 0) - (s.casualties > clsOf(s).crew * 0.5 ? 1 : 0));
 /** Pulses an emergency jump needs to spool: bigger drives take longer. */
-export const warpSpool = (s) => 3 + clsOf(s).size;
+export const warpSpool = (s) => Math.max(2, 3 + clsOf(s).size + (clsOf(s).spool ?? 0));
 export const overheated = (s) => s.heat >= clsOf(s).heat;
 /** The tether holding this ship, if someone has a grapple in her. */
 export const tetherOn = (s, sc = SC()) => sc?.tethers?.find(t => t.b === s.id) ?? null;

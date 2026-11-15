@@ -811,3 +811,8 @@ body.sf-theme ::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.25); }
 .sf-tag.l-licensed { color: var(--sf-info); border-color: var(--sf-info); }
 .sf-tag.l-restricted { color: var(--sf-warn); border-color: var(--sf-warn); }
 .sf-tag.l-state { color: var(--sf-crit); border-color: var(--sf-crit); }
+
+/* Refit */
+.sf-fit-list { border-left: 2px solid var(--sf-accent); margin: 2px 0 8px 4px; padding-left: 8px; max-height: 46vh; overflow-y: auto; }
+.sf-fit-opt.blocked b { opacity: 0.6; }
+.sf-fit-opt { align-items: flex-start; gap: 6px; }
