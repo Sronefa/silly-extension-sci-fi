@@ -2,6 +2,7 @@
 import { initAgentsUi } from './src/ui/agents.js';
 import { initShipCombatUi } from './src/ui/shipcombat.js';
 import { initRefitUi } from './src/ui/refit.js';
+import { initDecksUi } from './src/ui/decks.js';
 import { settings, on } from './src/core/st.js';
 import { S, migrate, notify } from './src/core/state.js';
 import { initAiLink, refreshPrompt } from './src/core/ailink.js';
@@ -31,6 +32,7 @@ function start() {
         initCombatUi();
         initShipCombatUi();
         initRefitUi();
+        initDecksUi();
         initAgentsUi();
         initHud();
         initSettings();

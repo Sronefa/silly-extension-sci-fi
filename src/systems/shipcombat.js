@@ -9,6 +9,7 @@ import { skillOf, gainXp, skillCheck } from './character.js';
 import { applyHit, randomPart, isDead } from './body.js';
 import { advanceTime, killPlayer } from './sim.js';
 import { effectiveClass } from './refit.js';
+import { deckPlan, stationRoom } from '../data/decks.js';
 
 const rnd = Math.random;
 const chance = (p) => rnd() < p;
@@ -60,12 +61,41 @@ export function playerPost(st = S()) {
     return null;
 }
 export const clearance = (st = S()) => POSTS[playerPost(st)?.role]?.clearance ?? 0;
+
+/** The vessel the player is aboard, with its deck plan. Strike craft have no interior. */
+export function aboardShip(st = S()) {
+    const p = playerPost(st);
+    if (!p) return null;
+    const cls = (p.own && st.ship ? effectiveClass(st) : null) ?? VESSELS[p.classId];
+    const plan = deckPlan(cls);
+    return plan ? { name: p.shipName, cls, plan, role: p.role } : null;
+}
+/** The compartment the player is standing in, when the game knows. Leaving the ship or a scene change forgets it. */
+export function playerRoom(st = S()) {
+    const a = st?.aboard;
+    if (!a || a.place !== st.loc.place) return null;
+    const ship = aboardShip(st);
+    if (!ship || ship.name !== a.ship) return null;
+    return ship.plan.rooms.find(r => r.id === a.room) ?? null;
+}
+/** What the player can work in a battle: their post's consoles, but only from the compartment the post is in. */
+export function consoles(sc = SC()) {
+    const list = POSTS[sc?.role]?.can ?? [];
+    if (!list.length) return list;
+    const st = S();
+    const room = playerRoom(st);
+    if (!room) return list; // wherever they are, nobody has said they left their post
+    const ship = aboardShip(st);
+    const station = ship ? stationRoom(ship.plan, sc.role) : null;
+    if (!station || station.id === room.id || (sc.role === 'commander' && room.id === 'flag')) return list;
+    return [];
+}
 /** May the player touch this domain (helm, weapons, engineering, sensors, command, fleet) right now? */
 export function may(domain, sc = SC()) {
     if (!sc || sc.over) return false;
     const ps = playerShip(sc);
     if (!ps || !isActive(ps)) return false;
-    return POSTS[sc.role]?.can.includes(domain) ?? false;
+    return consoles(sc).includes(domain);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -231,7 +261,7 @@ export const shownAs = (sc, side, t) => (masked(sc, side, t) ? clsOf(shipById(t.
 
 /** The skill level working one station of a ship: the player's own when they hold it. */
 export function quality(sc, s, domain) {
-    if (s.id === sc.playerShip && POSTS[sc.role]?.can.includes(domain)) {
+    if (s.id === sc.playerShip && consoles(sc).includes(domain)) {
         const cap = S()?.captain;
         if (cap) {
             const cls = clsOf(s);
@@ -478,7 +508,8 @@ const CALLED = { drives: 'drives', weapons: 'weapons', reactor: 'reactor', senso
 function hurtPlayer(sc, s, roomId, severity) {
     const st = S();
     if (!st || s.id !== sc.playerShip || st.dead) return;
-    const mine = ROOMS[roomId]?.station?.includes(sc.role) || (sc.role === 'pilot' && roomId === 'cockpit') || (sc.role === 'xo' && roomId === 'bridge');
+    const here = playerRoom(st);
+    const mine = here ? here.sys === roomId : ROOMS[roomId]?.station?.includes(sc.role) || (sc.role === 'pilot' && roomId === 'cockpit') || (sc.role === 'xo' && roomId === 'bridge');
     if (!mine) return;
     if (!chance(sc.playerAct === 'brace' ? 0.3 : 0.55)) { say(sc, `The ${ROOMS[roomId].name.toLowerCase()} takes a hit around you. You are unhurt.`, 'warn', true); return; }
     const partId = randomPart();
@@ -767,7 +798,7 @@ function npcCaptain(sc, s) {
 }
 
 function aiMorale(sc, s) {
-    if (s.isPlayer) { if (!(POSTS[sc.role]?.can ?? []).includes('command')) npcCaptain(sc, s); return; }
+    if (s.isPlayer) { if (!consoles(sc).includes('command')) npcCaptain(sc, s); return; }
     const cls = clsOf(s);
     if (cls.machine || cls.doctrine === 'hold') return;
     const friends = sc.ships.filter(o => o.side === s.side && isActive(o)).length;
@@ -1085,7 +1116,8 @@ export function joinBoardingDefence() {
     const b = sc?.boardingPending;
     if (!b) return;
     const ps = playerShip(sc);
-    startCombat({ scene: `Aboard ${ps.name}, corridor`, groups: parseEnemies([b.kind, String(clamp(b.n, 2, 6))]) });
+    const where = playerRoom(st)?.name ?? aboardShip(st)?.plan.rooms.find(r => r.id === 'lock')?.name ?? 'corridor';
+    startCombat({ scene: `Aboard ${ps.name}, ${where}`, groups: parseEnemies([b.kind, String(clamp(b.n, 2, 6))]) });
     sc.boarding = b;
     sc.boardingPending = null;
 }
@@ -1322,7 +1354,7 @@ export function runPulse() {
     if (!resolveBoarding(sc, st)) { finishShipCombat('boarded'); return 'boarded'; }
     sc.pulse++;
     const ps = playerShip(sc);
-    const can = POSTS[sc.role]?.can ?? [];
+    const can = consoles(sc);
     // The player may lend a hand even without a station.
     sc.helped = false;
     if (sc.playerAct === 'dc' && ps && isActive(ps)) {

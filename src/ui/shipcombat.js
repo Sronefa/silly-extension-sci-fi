@@ -10,16 +10,16 @@ import {
     SC, clsOf, sizeOf, shipById, playerShip, isActive, dist, bearing, angDiff, playerPost, clearance, resolveClass,
     startShipCombatFromTokens, runPulse, order, pendingOrders, weaponBlock, hitChance, orderSeconds, quality, joinBoardingDefence, dcTeams, autoDc,
     topSpeed, sensorRange, signature, roomPct, warpSpool, playerSurrender, abandonShip, demandSurrender, setFleetOrder,
-    abortShipCombat, salvagePrize, tetherOn, masked, shownAs,
+    abortShipCombat, salvagePrize, tetherOn, masked, shownAs, consoles,
 } from '../systems/shipcombat.js';
 import { startCombat, parseEnemies } from '../systems/combat.js';
 import { registerCommand } from '../systems/sim.js';
 import { registerPromptSection } from '../core/ailink.js';
 import { blip } from './sfx.js';
 
-const can = (domain, sc = SC()) => !!sc && (POSTS[sc.role]?.can.includes(domain) ?? false);
+const can = (domain, sc = SC()) => !!sc && consoles(sc).includes(domain);
 const live = (sc = SC()) => { const ps = playerShip(sc); return !!ps && isActive(ps) && !sc.over; };
-const hasConsole = (st) => !!st.shipCombat && (POSTS[st.shipCombat.role]?.can.length ?? 0) > 0;
+const hasConsole = (st) => !!st.shipCombat && consoles(st.shipCombat).length > 0;
 const clock = (pulses) => { const s = pulses * PULSE_SECONDS; return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 const deg = (n) => String(Math.round(((n % 360) + 360) % 360)).padStart(3, '0');
 const off = (ok) => !ok;
@@ -259,7 +259,8 @@ function commandHtml(st, sc) {
 function stationHtml(st, sc) {
     const ps = playerShip(sc);
     const felt = sc.log.filter(l => l.felt).slice(-14).reverse();
-    return `<div class="sf-note">You have no station that shows you the battle. You know only what you can hear, feel and are told aboard ${esc(ps.name)}.</div>
+    const away = (POSTS[sc.role]?.can.length ?? 0) > 0;
+    return `<div class="sf-note">${away ? 'You are away from your station. Your consoles are there, not here. Go back on the deck plan to take them up again.' : 'You have no station that shows you the battle.'} You know only what you can hear, feel and are told aboard ${esc(ps.name)}.</div>
         <div class="sf-actions">
             ${btn('sc-act', sc.playerAct === 'brace' ? 'Braced' : 'Brace', { icon: 'fa-hands-holding', cls: sc.playerAct === 'brace' ? 'primary' : '', data: { a: 'brace' }, title: 'Less likely to be hurt if your compartment is hit' })}
             ${sc.role === 'crew' ? btn('sc-act', sc.playerAct === 'dc' ? 'With the repair party' : 'Help damage control', { icon: 'fa-fire-extinguisher', cls: sc.playerAct === 'dc' ? 'primary' : '', data: { a: 'dc' }, title: 'An engineering check. Dangerous work.' }) : ''}
