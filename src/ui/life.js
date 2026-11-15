@@ -4,16 +4,17 @@ import { registerTab, registerWidget, registerActions, btn, ask, confirmAsk } fr
 import { S, commit, fmtDate } from '../core/state.js';
 import { toast } from '../core/st.js';
 import { esc, fmtInt } from '../core/util.js';
-import { LIVING, LICENCES, LENDERS } from '../data/life.js';
+import { LIVING, LICENCES, LENDERS, OWNERS } from '../data/life.js';
 import { WEAR_PARTS, DAY } from '../data/economy.js';
 import { VESSELS, LEGAL } from '../data/vessels.js';
 import { ownClass } from '../data/hulls.js';
 import { port, wearLabel } from '../systems/services.js';
 import {
-    jobBoard, workShift, living, licencesOf, licenceStatus, enrol, courseStep, hasSchool, missingLicences,
+    jobBoard, takeShift, living, licencesOf, licenceStatus, enrol, courseStep, hasSchool, missingLicences,
     yardStock, inspect, listingWear, buyQuote, buyShip, sellShip, tradeIn, layUpQuote, layUp, reclaim, paperCheck, lifeTick,
 } from '../systems/life.js';
-import { loans, loanOffers, takeLoan, repay, financeTick, arrivalChecks, imprison, enslave, release, custodyAct, totalDebt } from '../systems/finance.js';
+import { loans, loanOffers, takeLoan, repay, financeTick, arrivalChecks, imprison, enslave, release, custodyAct, totalDebt, ownerKind, exitsText } from '../systems/finance.js';
+import { areasHere, areaOf, areaName, walkTime, moveTo, clockIn, quit, carryOn, present, activityTick, activityPrompt } from '../systems/activity.js';
 import { registerCommand, onTick, onArrival, advanceTime, fmtDuration, isAiCommand } from '../systems/sim.js';
 import { registerPromptSection } from '../core/ailink.js';
 import { galaxy } from '../core/state.js';
@@ -27,13 +28,39 @@ function act(fn) {
     commit('life');
 }
 
+/** The commitment card: what is booked or under way, and how far along it is. */
+function activityHtml(st) {
+    const a = st.activity;
+    if (!a) return '';
+    const here = present(st, a);
+    const place = a.area ? areaName(st, a.area).toLowerCase() : '';
+    if (!a.on) {
+        return `<div class="sf-note"><b>${esc(a.name)}</b><br>Booked. ${here ? 'You are in the right place.' : `Get to the ${esc(place)}.`} It has to start within ${esc(fmtDuration(Math.max(0, a.by - st.minutes)))}.</div>
+            <div class="sf-actions">${btn('act-start', 'Clock in', { icon: 'fa-play', cls: 'primary', disabled: !here })}${btn('act-quit', 'Cancel', { icon: 'fa-xmark' })}</div>`;
+    }
+    const left = a.need - a.done;
+    return `<div class="sf-note"><b>${esc(a.name)}</b><br>${esc(fmtDuration(a.done))} done, ${esc(fmtDuration(left))} to go.${here ? '' : ` <span class="sf-warn-line">You have left the ${esc(place)}: ${Math.max(0, 45 - a.away)} min before it counts as walking out.</span>`}
+            <span class="sf-xp sf-act-bar"><span style="width:${Math.round(100 * a.done / a.need)}%"></span></span></div>
+        <small class="sf-dim">The time is lived: it passes as the story does. Play the scene in the chat, or get on with it quietly an hour at a time.</small>
+        <div class="sf-actions">${btn('act-carry', `Get on with it (${left >= 60 ? '1 h' : `${left} min`})`, { icon: 'fa-hourglass-half', disabled: !here })}${btn('act-quit', a.custody ? 'Down tools' : 'Walk out', { icon: 'fa-door-open' })}</div>`;
+}
+
+function whereHtml(st) {
+    const p = port(st);
+    if (!p) return `${activityHtml(st)}<div class="sf-dim">You are not aboard a station.</div>`;
+    const here = areaOf(st);
+    const rows = areasHere(st).map(a => `<li class="sf-row"><span class="sf-grow">${a.id === here ? `<b class="sf-ok-line"><i class="fa-solid fa-location-dot"></i> ${esc(a.name)}</b>` : esc(a.name)}${st.activity?.area === a.id ? ' <span class="sf-tag l-licensed">expected here</span>' : ''}</span>
+        ${a.id === here ? '<small class="sf-dim">you are here</small>' : btn('area-go', `Walk · ${walkTime(st, here, a.id)} min`, { icon: 'fa-person-walking', data: { id: a.id } })}</li>`).join('');
+    return `${activityHtml(st)}<small class="sf-dim">${esc(p.station.name)}. Getting about takes time, and things happen where they happen: work at the workplace, beds in the habitat ring, ships at the yard.</small><ul class="sf-list">${rows}</ul>`;
+}
+
 function jobsHtml(st) {
     const p = port(st);
     if (!p) return '<div class="sf-dim">Shift work is found on stations. Dock, or get yourself to one.</div>';
     const jobs = jobBoard(st);
     const liv = Object.entries(LIVING).map(([k, v]) => `<button type="button" class="sf-btn" data-sf="life-live" data-kind="${k}"${v.cost <= st.captain.credits ? '' : ' disabled'}>${esc(v.name)} · ${v.cost} cr</button>`).join('');
-    return `<small class="sf-dim">A shift is eight hours. A second shift the same day is overtime: it pays the same and costs you more. ${st.indenture ? 'Combine Credit takes 70% of every wage until your indenture is paid.' : ''}</small>
-        <ul class="sf-list">${jobs.map(j => `<li class="sf-row"><span class="sf-grow"><b>${esc(j.name)}</b> <small class="sf-dim">${esc(j.skill)}${j.min ? ` ${j.min}+` : ''}</small><br><small class="${j.why ? 'sf-warn-line' : 'sf-dim'}">${esc(j.why || j.desc)}</small></span>
+    return `<small class="sf-dim">A shift is eight hours, worked at the workplace and lived in story time. Sign on, get there within two hours and clock in. A second shift the same day is overtime: it pays the same and costs you more. ${st.indenture ? 'Combine Credit takes 70% of every wage until your indenture is paid.' : ''}</small>
+        <ul class="sf-list">${jobs.map(j => `<li class="sf-row"><span class="sf-grow"><b>${esc(j.name)}</b> <small class="sf-dim">${esc(j.skill)}${j.min ? ` ${j.min}+` : ''} · ${esc(areaName(st, j.at).toLowerCase())}</small><br><small class="${j.why ? 'sf-warn-line' : 'sf-dim'}">${esc(j.why || j.desc)}</small></span>
             <button type="button" class="sf-btn${j.why ? '' : ' primary'}" data-sf="life-work" data-id="${j.id}"${j.why ? ' disabled' : ''}>${cr(j.pay)}</button></li>`).join('')}</ul>
         <div class="sf-sub">Bed and board</div><div class="sf-actions">${liv}</div>`;
 }
@@ -53,9 +80,9 @@ function licenceHtml(st) {
     let course = '';
     if (c) {
         const def = LICENCES[c.id];
-        const next = c.lessons < def.lessons ? `Take lesson ${c.lessons + 1} (4 h)` : !c.theory ? `Sit the written test${c.fail ? ' · 300 cr' : ''}` : `Fly the check flight${c.fail ? ' · 300 cr' : ''}`;
+        const next = c.lessons < def.lessons ? `Book lesson ${c.lessons + 1} (4 h)` : !c.theory ? `Book the written test (2 h)${c.fail ? ' · 300 cr' : ''}` : `Book the check flight (3 h)${c.fail ? ' · 300 cr' : ''}`;
         course = `<div class="sf-note">Enrolled: ${esc(def.name)}. ${c.lessons}/${def.lessons} lessons${c.theory ? ', written test passed' : ''}.</div>
-            <div class="sf-actions">${btn('life-course', next, { icon: 'fa-graduation-cap', cls: 'primary', disabled: !school })}</div>`;
+            <div class="sf-actions">${btn('life-course', next, { icon: 'fa-graduation-cap', cls: 'primary', disabled: !school || !!st.activity })}</div>`;
     }
     const own = st.ship ? missingLicences(st, VESSELS[st.ship.classId]) : [];
     return `${own.length ? `<div class="sf-warn-line"><i class="fa-solid fa-triangle-exclamation"></i> You are flying the ${esc(st.ship.name)} without the ${own.map(id => esc(LICENCES[id].name)).join(' and the ')}. Policed systems fine for that.</div>` : ''}
@@ -97,7 +124,7 @@ function offerHtml(st, o) {
             <div class="sf-kv"><span>Hold / fuel / crew</span><b>${oc.cargo} t · ${oc.fuel} · ${oc.crewMax}</b></div>
             ${lw ? `<div class="sf-kv"><span>Hull condition</span><b>${lw.hull}%</b></div><div class="sf-tags">${wearLine(lw.wear)}</div>
                 <small class="${lw.level === 2 ? 'sf-ok-line' : 'sf-warn-line'}">${lw.level === 2 ? 'Surveyed: this is her real condition.' : lw.level === 1 ? 'You looked her over but could not be sure. This is still mostly the seller\'s word.' : 'Seller\'s description. Nobody you trust has looked at her.'}</small>
-                ${lw.level < 2 ? `<div class="sf-actions">${lw.level === 0 ? btn('yard-inspect', 'Inspect her yourself (4 h)', { icon: 'fa-magnifying-glass', data: { id: o.id, how: 'self' } }) : ''}${btn('yard-inspect', `Hire a surveyor · ${cr(Math.max(150, Math.round(o.price * 0.015 / 10) * 10))}`, { icon: 'fa-clipboard-check', data: { id: o.id, how: 'pay' } })}</div>` : ''}` : ''}
+                ${lw.level < 2 && lw.survey ? `<small class="sf-dim">A surveyor is going through her. Report due ${esc(fmtDate(lw.survey.due))}.</small>` : ''}${lw.level < 2 && !lw.survey ? `<div class="sf-actions">${lw.level === 0 ? btn('yard-inspect', 'Inspect her yourself (4 h)', { icon: 'fa-magnifying-glass', data: { id: o.id, how: 'self' } }) : ''}${btn('yard-inspect', `Hire a surveyor · ${cr(Math.max(150, Math.round(o.price * 0.015 / 10) * 10))}`, { icon: 'fa-clipboard-check', data: { id: o.id, how: 'pay' } })}</div>` : ''}` : ''}
             ${q.missing.length ? `<small class="sf-warn-line">You do not hold the ${q.missing.map(id => esc(LICENCES[id].name)).join(' or the ')}. You can buy her, but flying her in policed space will be fined.</small>` : ''}
             ${q.trade ? `<div class="sf-kv"><span>Trade-in for the ${esc(st.ship.name)}</span><b>${cr(q.trade)}</b></div>` : ''}
             <div class="sf-mk-two">
@@ -138,30 +165,50 @@ function custodyHtml(st) {
     const c = st.custody;
     const sys = galaxy().systems[c.sys];
     const locked = c.cool > st.minutes;
-    const head = c.type === 'prison'
+    const slave = c.type === 'slave';
+    const o = slave ? ownerKind(c) : null;
+    const busy = !!st.activity;
+    const head = !slave
         ? `<div class="sf-downed"><b>IMPRISONED</b><span>${esc(sys.name)} Penitentiary, for ${esc(c.reason)}. ${esc(fmtDuration(c.until - st.minutes))} left to serve.</span></div>`
-        : `<div class="sf-downed"><b>ENSLAVED</b><span>Property of ${esc(c.owner)}: ${esc(c.work)}. ${Math.floor((st.minutes - c.since) / DAY)} days so far.</span></div>`;
-    return `${head}
-        <div class="sf-kv"><span>${c.type === 'prison' ? 'Conduct' : `${esc(c.owner)}'s trust`}</span><b>${Math.round(c.trust)}%</b></div>
-        ${c.type === 'slave' ? `<div class="sf-kv"><span>Hidden away</span><b>${cr(c.stash)}</b></div><div class="sf-kv"><span>Your price</span><b>${cr(c.price)}</b></div>` : `<div class="sf-kv"><span>Prison account</span><b>${cr(st.captain.credits)}</b></div>`}
-        ${locked ? `<div class="sf-warn-line">${c.type === 'prison' ? 'In solitary' : 'Chained and watched'} until ${esc(fmtDate(c.cool))}.</div>` : ''}
+        : `<div class="sf-downed"><b>ENSLAVED</b><span>${esc(o.type)}. Property of ${esc(c.owner)}: ${esc(c.work)}. ${Math.floor((st.minutes - c.since) / DAY)} days so far.</span></div>`;
+    // What a slave knows about being sold their freedom: nothing, until the owner says.
+    const price = !slave ? '' : c.asked || c.trust >= 40
+        ? (c.sells ? `<div class="sf-kv"><span>Your price</span><b>${cr(c.price)}</b></div>` : `<div class="sf-kv"><span>Your price</span><b class="sf-crit-txt">not for sale</b></div>`)
+        : '<div class="sf-kv"><span>Your price</span><b class="sf-dim">unknown</b></div>';
+    const ways = !slave ? '' : [
+        c.until ? `<div class="sf-kv"><span>Bond runs out in</span><b>${esc(fmtDuration(c.until - st.minutes))}</b></div>` : '',
+        o.exit === 'wins' ? `<div class="sf-kv"><span>Victories in the pits</span><b>${c.wins} of ${c.need}</b></div>` : '',
+    ].join('');
+    const extra = !slave ? '' : [
+        o.exit === 'wins' ? btn('custody', c.bout > st.minutes ? `Next bout ${fmtDate(c.bout)}` : 'Fight your bout', { icon: 'fa-hand-back-fist', data: { a: 'fight' }, disabled: c.bout > st.minutes || busy }) : '',
+        o.exit === 'join' ? btn('custody', 'Ask to join the crew', { icon: 'fa-skull-crossbones', data: { a: 'join' }, disabled: c.trust < 70 || locked || busy }) : '',
+        btn('custody', c.sells || !(c.asked || c.trust >= 40) ? 'Offer to buy your freedom' : 'Not for sale', { icon: 'fa-coins', data: { a: 'buy' }, disabled: c.trust < 40 || (c.asked && !c.sells) || busy }),
+    ].join('');
+    const note = !slave
+        ? 'The sentence is served in story time. Good conduct takes a little off it and makes an escape easier to set up; a failed escape adds thirty days. Debts are discharged when you walk out.'
+        : `Nothing is skipped. Trust makes escape easier. ${o.exit === 'term' ? 'A bond runs out in the end, and a contractor will always take money to close it early. ' : o.exit === 'wins' ? 'By the custom of the pits, enough victories earn freedom. ' : o.exit === 'join' ? 'A crew that comes to respect a thrall may take them in as one of their own. ' : ''}Some owners will sell you your freedom once they trust you; some never will, and you only learn which by earning enough trust to ask. Friends who think well of you may come looking, in time.`;
+    return `${head}${activityHtml(st)}
+        <div class="sf-kv"><span>${!slave ? 'Conduct' : `${esc(c.owner)}'s trust`}</span><b>${Math.round(c.trust)}%</b></div>
+        ${slave ? `<div class="sf-kv"><span>Hidden away</span><b>${cr(c.stash)}</b></div>${price}${ways}` : `<div class="sf-kv"><span>Prison account</span><b>${cr(st.captain.credits)}</b></div>`}
+        ${locked ? `<div class="sf-warn-line">${!slave ? 'In solitary' : 'Chained and watched'} until ${esc(fmtDate(c.cool))}.</div>` : ''}
         <div class="sf-actions">
-            ${btn('custody', c.type === 'prison' ? 'Eat in the mess' : 'Eat what you are given', { icon: 'fa-utensils', data: { a: 'eat' } })}
-            ${btn('custody', c.type === 'prison' ? 'Work detail (8 h)' : 'Work the day (8 h)', { icon: 'fa-person-digging', data: { a: 'work' } })}
+            ${btn('custody', !slave ? 'Eat in the mess' : 'Eat what you are given', { icon: 'fa-utensils', data: { a: 'eat' } })}
+            ${btn('custody', !slave ? 'Go out on a work detail (8 h)' : 'Begin the day\'s work (8 h)', { icon: 'fa-person-digging', data: { a: 'work' }, disabled: busy })}
             ${btn('custody', 'Defy them', { icon: 'fa-hand-fist', data: { a: 'defy' } })}
             ${btn('custody', 'Attempt escape', { icon: 'fa-person-running', cls: 'primary', data: { a: 'escape' }, disabled: locked })}
-            ${c.type === 'slave' ? btn('custody', 'Offer to buy your freedom', { icon: 'fa-coins', data: { a: 'buy' }, disabled: c.stash < c.price || c.trust < 40 }) : ''}
+            ${extra}
         </div>
-        <small class="sf-dim">${c.type === 'prison'
-        ? 'The sentence is served in story time. Good conduct takes a little off it and makes an escape easier to set up; a failed escape adds thirty days. Debts are discharged when you walk out.'
-        : 'Nothing is skipped. Trust makes escape easier and is the only thing that makes an owner listen to an offer. Friends who think well of you may come looking, in time.'}</small>`;
+        <small class="sf-dim">${note}</small>`;
 }
 
 function promptSection(st) {
     const L = [];
     const c = st.custody;
     if (c?.type === 'prison') L.push(`CUSTODY: ${st.captain.name} is a prisoner in the ${galaxy().systems[c.sys].name} Penitentiary (${c.reason}), with ${fmtDuration(c.until - st.minutes)} left to serve. They own nothing and cannot leave. Play prison life in real story time: cell block, work details, other prisoners, guards. Never skip the sentence and never release them yourself.`);
-    if (c?.type === 'slave') L.push(`CUSTODY: ${st.captain.name} is a slave, the property of ${c.owner} (${c.work}). They own nothing, have no rights here and cannot leave. Owner's trust: ${Math.round(c.trust)}%. Play this life in real story time and do not soften it. They get out only through the game: escape, buying freedom, or rescue. If the story itself frees them (a raid, a rescue by named characters), add the command: release.`);
+    if (c?.type === 'slave') L.push(`CUSTODY: ${st.captain.name} is a slave (${ownerKind(c).type.toLowerCase()}), the property of ${c.owner}: ${c.work}. They own nothing, have no rights here and cannot leave. Owner's trust: ${Math.round(c.trust)}%.${c.until ? ` The bond has ${fmtDuration(c.until - st.minutes)} left to run.` : ''}${c.need ? ` Pit victories: ${c.wins} of ${c.need}.` : ''} Play this life in real story time and do not soften it. ${exitsText(c)} They get out only through the game. If the story itself frees them (a raid, a rescue by named characters), add the command: release.`);
+    const act = activityPrompt(st);
+    if (act) L.push(act);
+    L.push('TIME: the game clock is the truth. A reply covers minutes, not hours, unless the narration really spans more, in which case add time +Nm or +Nh for exactly what it covered. Never skip ahead to the end of a journey, a shift, a course or a sentence, and never move the character somewhere without the way there being played.');
     if (c) return L.join('\n');
     const book = loans(st);
     if (book.length) L.push(`Debts: ${book.map(l => `${LENDERS[l.lender].name} ${fmtInt(l.balance)} cr${l.missed ? ` (${l.missed} payments missed)` : ''}${l.repo ? ', repossession ordered' : ''}`).join('; ')}.`);
@@ -174,27 +221,32 @@ function promptSection(st) {
         if (miss.length) L.push(`${st.captain.name} is flying without the ${miss.map(id => LICENCES[id].name).join(' or the ')}.`);
     }
     if (st.captain.course) L.push(`${st.captain.name} is a student pilot working toward the ${LICENCES[st.captain.course.id].name}.`);
-    L.push('LIFE RULES: wages, loans, ship purchases, licences and sentences are run by the game. If the story has the character arrested and convicted, add: arrest <days> "offence". If they are captured and sold by slavers or pirates, add: enslave "owner name". Never invent payments, pardons or releases.');
+    L.push(`LIFE RULES: wages, loans, ship purchases, licences and sentences are run by the game. If the story has the character arrested and convicted, add: arrest <days> "offence". If they are captured and sold by slavers or pirates, add: enslave "owner name" <${OWNERS.map(o => o.kind).join('|')}> [nosale] (the kind of owner decides the kind of bondage; nosale for an owner who will never sell them their freedom). Never invent payments, pardons or releases.`);
     return L.join('\n');
 }
 
 export function initLifeUi() {
-    onTick((st) => { lifeTick(st); financeTick(st); });
+    onTick((st, mins) => { activityTick(st, mins); lifeTick(st); financeTick(st); });
     onArrival((st) => { paperCheck(st); arrivalChecks(st); });
     registerPromptSection(promptSection);
 
     const free = (st) => !st.custody;
     registerWidget({ id: 'custody', when: (st) => !!st.custody, title: (st) => (st.custody.type === 'prison' ? 'Prison' : 'Bondage'), render: custodyHtml });
+    registerWidget({ id: 'whereabouts', when: free, title: () => 'Where you are', render: whereHtml });
     registerWidget({ id: 'jobs', when: free, title: () => 'Work and lodging', render: jobsHtml });
     registerWidget({ id: 'bank', title: () => 'Debts and lenders', render: bankHtml });
     registerWidget({ id: 'licences', when: free, title: () => 'Licences', render: licenceHtml });
     registerWidget({ id: 'shipyard', when: free, title: () => 'Shipyard', render: shipyardHtml });
     registerWidget({ id: 'parking', when: (st) => free(st) && (!!st.ship || !!st.laidUp), title: () => 'Pads and hangars', render: parkingHtml });
     registerTab({ id: 'custody', label: 'Custody', icon: 'fa-lock', order: 2, when: (st) => !!st.custody, widgets: ['custody', 'bank'] });
-    registerTab({ id: 'station', label: 'Station', icon: 'fa-building', order: 25, when: free, widgets: ['jobs', 'bank', 'licences', 'shipyard', 'parking'] });
+    registerTab({ id: 'station', label: 'Station', icon: 'fa-building', order: 25, when: free, widgets: ['whereabouts', 'jobs', 'bank', 'licences', 'shipyard', 'parking'] });
 
     registerActions({
-        'life-work'(el) { act(() => workShift(el.dataset.id)); },
+        'life-work'(el) { act(() => takeShift(el.dataset.id)); },
+        'area-go'(el) { act(() => moveTo(el.dataset.id)); },
+        'act-start'() { act(() => clockIn()); },
+        'act-carry'() { act(() => carryOn(60)); },
+        async 'act-quit'() { const a = S().activity; if (a && (!a.on || await confirmAsk('Walk out?', 'You lose what is left of it.'))) act(() => quit()); },
         'life-live'(el) { act(() => living(el.dataset.kind)); },
         'life-enrol'(el) { act(() => enrol(el.dataset.id)); },
         'life-course'() { act(() => courseStep()); },
@@ -225,6 +277,7 @@ export function initLifeUi() {
         'custody'(el) { act(() => custodyAct(el.dataset.a, advanceTime)); },
     });
 
+    registerCommand('area', (st, args) => moveTo(args.join(' '), { ai: isAiCommand() }), ['goto', 'walk']);
     registerCommand('arrest', (st, [days = '30', ...why]) => {
         if (st.custody) throw new Error('already in custody');
         imprison(st, isAiCommand() ? Math.min(Number(days) || 30, 365) : Number(days) || 30, why.join(' ') || 'an offence against the law');
@@ -232,8 +285,11 @@ export function initLifeUi() {
     }, ['imprison', 'jail']);
     registerCommand('enslave', (st, args) => {
         if (st.custody?.type === 'slave') throw new Error('already enslaved');
-        enslave(st, args.join(' '));
-        return `Enslaved: property of ${st.custody.owner}`;
+        const kind = args.find(a => OWNERS.some(o => o.kind === a.toLowerCase()))?.toLowerCase();
+        const nosale = args.some(a => /^nosale$/i.test(a));
+        const name = args.filter(a => a.toLowerCase() !== kind && !/^nosale$/i.test(a)).join(' ');
+        enslave(st, name, { kind, sells: nosale ? false : undefined });
+        return `Enslaved (${ownerKind(st.custody).type.toLowerCase()}): property of ${st.custody.owner}`;
     }, ['enslaved']);
     registerCommand('release', (st, args) => {
         // The storyteller may free a slave through the story, but may not open a prison.

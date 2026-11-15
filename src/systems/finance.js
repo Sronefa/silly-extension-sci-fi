@@ -1,15 +1,16 @@
 // Money owed and what happens when it is not paid: loans from banks, the Combine and Ashen
 // moneylenders, weekly payments, repossession, warrants, collectors, and the two places a
 // bankrupt can end up. Bankruptcy is never game over: prison in policed space, slavery outside it.
-import { S, addLog, adjust } from '../core/state.js';
+import { S, addLog, adjust, fmtDate } from '../core/state.js';
 import { getGalaxy } from './galaxy.js';
 import { uid, clamp } from '../core/util.js';
 import { LENDERS, OWNERS, OWNER_NAMES } from '../data/life.js';
 import { WEEK, DAY } from '../data/economy.js';
 import { VESSELS } from '../data/vessels.js';
 import { econ, ledger } from './market.js';
-import { skillCheck, skillOf } from './character.js';
+import { skillCheck, skillOf, gainXp } from './character.js';
 import { damagePart, randomPart } from './body.js';
+import { book, registerActivity } from './activity.js';
 
 const fmt = (n) => Math.round(n).toLocaleString('en-US');
 const sysOf = (st) => getGalaxy(st.seed).systems[st.loc.system];
@@ -197,6 +198,7 @@ export function imprison(st, days, reason, { seize = true } = {}) {
     const sys = sysOf(st);
     days = clamp(Math.round(days), 3, 720);
     if (seize) strip(st, { toDebt: true });
+    st.activity = null;
     st.custody = { type: 'prison', sys: sys.id, since: st.minutes, until: st.minutes + days * DAY, reason, trust: 0, cool: 0 };
     st.loc.docked = false;
     st.loc.place = `${sys.name} Penitentiary`;
@@ -205,7 +207,12 @@ export function imprison(st, days, reason, { seize = true } = {}) {
     st.pendingEvent = `${st.captain.name} has been arrested and sentenced to ${days} days in the ${sys.name} Penitentiary for ${reason}.${seize ? ' Ship, cargo, money and belongings have all been seized.' : ''} The sentence is lived in story time, never skipped: play out intake, the cell block, the work details, the other prisoners and the guards.`;
 }
 
-export function enslave(st, ownerName) {
+/**
+ * Sold. kind picks the sort of owner (see OWNERS); otherwise it is whoever was buying.
+ * Whether this owner would ever sell you back to yourself is rolled here and is not known
+ * to the slave until the owner trusts them enough to say.
+ */
+export function enslave(st, ownerName, { kind, sells } = {}) {
     // Slavers do not keep their stock where the law can see it.
     const g = getGalaxy(st.seed);
     if (sysOf(st).security > 1) {
@@ -214,20 +221,40 @@ export function enslave(st, ownerName) {
         if (dens[0]) { st.transit = null; st.route = []; st.loc.system = dens[0].id; st.loc.station = 0; st.visited[dens[0].id] = true; }
     }
     const sys = sysOf(st);
-    const o = OWNERS[Math.floor(Math.random() * OWNERS.length)];
+    const o = OWNERS.find(x => x.kind === kind) ?? OWNERS[Math.floor(Math.random() * OWNERS.length)];
     const owner = ownerName || OWNER_NAMES[Math.floor(Math.random() * OWNER_NAMES.length)];
     strip(st, { toDebt: false });
     // Whoever sold you has been paid. Outlaw debts die with your freedom; banks write you off.
     st.loans = []; st.bounty = 0; st.indenture = null; st.warrants = [];
     reconcileAfter(st);
-    st.custody = { type: 'slave', sys: sys.id, since: st.minutes, owner, kind: o.kind, work: o.work, price: 4000 + Math.floor(Math.random() * 9) * 1000, trust: 5, stash: 0, cool: 0, rescueDay: 0 };
+    st.activity = null;
+    const price = (o.price[0] + Math.floor(Math.random() * (o.price[1] - o.price[0] + 1))) * 1000;
+    st.custody = {
+        type: 'slave', sys: sys.id, since: st.minutes, owner, kind: o.kind, work: o.work, price,
+        sells: sells ?? Math.random() < o.sells, trust: 5, stash: 0, cool: 0, rescueDay: 0,
+    };
+    if (o.exit === 'term') st.custody.until = st.minutes + (180 + Math.floor(Math.random() * 220)) * DAY;
+    if (o.exit === 'wins') { st.custody.wins = 0; st.custody.need = 5 + Math.floor(Math.random() * 4); st.custody.bout = st.minutes + 3 * DAY; }
     st.loc.docked = false;
     st.loc.place = o.place.replace('{sys}', sys.name).replace('{owner}', owner);
     st.post = null;
     st.crew = st.crew.filter(() => false);
     addLog(`Taken and sold. ${st.captain.name} is now the property of ${owner}.`, 'story');
-    st.pendingEvent = `${st.captain.name} has been taken and sold as a slave to ${owner}, who runs ${o.name} in the ${sys.name} system. Everything they owned is gone. They are property now: ${o.work}. There is no time skip: play out this life day by day. The ways out are to earn the owner's trust and buy freedom if the owner will sell it, to be rescued, or to escape.`;
+    st.pendingEvent = `${st.captain.name} has been taken and sold as a slave to ${owner}, who runs ${o.name} in the ${sys.name} system. Everything they owned is gone. They are property now (${o.type.toLowerCase()}): ${o.work}. There is no time skip: play out this life day by day. ${exitsText(st.custody)}`;
 }
+
+export const ownerKind = (c) => OWNERS.find(x => x.kind === c.kind) ?? OWNERS[0];
+
+/** The ways out, as the storyteller should know them. The owner's mind on selling is the owner's secret. */
+function exitsText(c) {
+    const o = ownerKind(c);
+    const ways = ['escape', 'rescue by friends'];
+    if (o.exit === 'term') ways.unshift('serving out the bond');
+    if (o.exit === 'join') ways.unshift('being taken into the crew as one of them, if they come to respect the character');
+    if (o.exit === 'wins') ways.unshift(`winning ${c.need} bouts in the pits, which by custom earns freedom`);
+    return `Ways out: ${ways.join('; ')}. ${c.sells ? `${c.owner} could be brought to sell the character their freedom, once trust is high, for about ${fmt(c.price)} credits.` : `${c.owner} does NOT sell what they own: no offer of money will ever buy this character's freedom, and ${c.owner} says so if asked.`}`;
+}
+export { exitsText };
 
 /** Takes everything. In prison the proceeds go against what is owed. */
 function strip(st, { toDebt }) {
@@ -251,6 +278,7 @@ export function release(st, how = 'released') {
     if (!c) throw new Error('not in custody');
     const sys = getGalaxy(st.seed).systems[c.sys];
     st.custody = null;
+    st.activity = null;
     st.loc.place = '';
     st.loc.docked = how !== 'escaped';
     if (c.type === 'prison' && how === 'released') {
@@ -286,18 +314,54 @@ export function custodyAct(action, advanceTime) {
         return c.type === 'prison' ? 'Ate in the mess hall' : 'Ate what was given';
     }
     if (action === 'work') {
-        advanceTime(480);
-        adjust(pc, 'stress', c.type === 'prison' ? 5 : 9, 0, 100);
-        c.trust = clamp(c.trust + (c.type === 'prison' ? 2 : 3), 0, 100);
-        if (c.type === 'prison') {
-            pc.credits += 15;
-            c.until -= Math.round(0.05 * DAY); // good conduct shaves a little off
-            return 'Worked a prison detail: 15 cr, and a mark for good conduct';
+        // The day's work is lived, hour by hour. There is nowhere to walk to: they take you.
+        const a = book(st, { kind: 'detail', custody: true, need: 480, name: c.type === 'prison' ? 'Prison work detail' : `The day's work for ${c.owner}`, note: c.type === 'slave' ? `The work: ${c.work}.` : '' });
+        a.on = true; a.started = st.minutes;
+        st.pendingEvent ??= c.type === 'prison' ? `${pc.name} is marched out on an eight hour work detail. Play it: the task, the guards, the other prisoners.` : `${pc.name}'s working day begins: ${c.work}. Eight hours of it. Play it without softening it.`;
+        return c.type === 'prison' ? 'Out on a work detail: eight hours, lived' : 'The working day begins: eight hours, lived';
+    }
+    if (action === 'fight') {
+        if (c.kind !== 'pit') throw new Error('there is no fight to be had');
+        if (st.activity) throw new Error('finish what you are doing first');
+        if (c.bout > st.minutes) throw new Error(`the next bout is on ${fmtDate(c.bout)}`);
+        advanceTime(45);
+        c.bout = st.minutes + 4 * DAY;
+        const dc = 11 + c.wins;
+        const r = skillCheck(pc, 'melee', dc);
+        gainXp(pc, 'melee', 8);
+        damagePart(pc, randomPart(), r.success ? 5 + Math.floor(Math.random() * 15) : 20 + Math.floor(Math.random() * 25));
+        if (!r.success) {
+            c.trust = clamp(c.trust - 5, 0, 100);
+            st.pendingEvent = `${pc.name} fought in the pits for ${c.owner} and lost (melee ${r.total} against ${dc}). They were beaten down in front of the crowd but live. Narrate the bout and the aftermath.`;
+            return 'Lost the bout';
         }
-        // Favours, errands and things that fall off tables: a trusted slave handles more of them.
-        const tip = Math.random() < 0.5 ? Math.round((10 + Math.random() * 50) * (1 + c.trust / 50)) : 0;
-        c.stash += tip;
-        return `Worked the day for ${c.owner}${tip ? ` and hid away ${tip} cr` : ''}`;
+        c.wins++;
+        const purse = 80 + c.wins * 40;
+        c.stash += purse;
+        c.trust = clamp(c.trust + 8, 0, 100);
+        if (c.wins >= c.need) {
+            pc.credits += c.stash;
+            release(st, 'freed by the custom of the pits');
+            st.pendingEvent = `${pc.name} has won bout number ${c.wins} in the pits (melee ${r.total} against ${dc}). By the custom of the pits that is enough: the crowd calls for it and ${c.owner} strikes the collar off in front of them. ${pc.name} walks out free with ${fmt(pc.credits)} credits in purses. Narrate it.`;
+            return 'Won, and won your freedom';
+        }
+        st.pendingEvent = `${pc.name} fought in the pits for ${c.owner} and won (melee ${r.total} against ${dc}): ${c.wins} of the ${c.need} victories that earn freedom. A purse of ${purse} credits is theirs to hide. Narrate the bout.`;
+        return `Won the bout: ${c.wins} of ${c.need}`;
+    }
+    if (action === 'join') {
+        if (c.kind !== 'ship') throw new Error('there is no crew to join');
+        if (c.trust < 70) throw new Error('they would laugh at you. Earn their respect first');
+        if (c.cool > st.minutes) throw new Error('not while you are in chains');
+        advanceTime(60);
+        const r = skillCheck(pc, skillOf(pc, 'firearms') >= skillOf(pc, 'melee') ? 'firearms' : 'melee', 12);
+        if (!r.success) { c.trust = clamp(c.trust - 15, 0, 100); st.pendingEvent = `${pc.name} asked ${c.owner} to be taken into the raider crew and was put to the test (${r.name} ${r.total} against 12). They failed it, and were laughed back to the bilges. Narrate it.`; return 'They tested you and you failed'; }
+        pc.credits += c.stash;
+        adjust(st.reputation, 'ashen', 10, -100, 100);
+        release(st, 'blooded into the crew');
+        st.loc.docked = false;
+        st.loc.place = `Aboard the raider of ${c.owner}`;
+        st.pendingEvent = `${pc.name} asked to be taken into the raider crew and passed the test (${r.name} ${r.total} against 12). ${c.owner} has the collar struck off: they are no longer property but the newest and lowest hand of a raider crew, free to stay or to leave at the next port. Narrate it. If they take a post aboard, use the post command.`;
+        return 'Blooded into the crew: free';
     }
     if (action === 'defy') {
         advanceTime(60);
@@ -308,9 +372,10 @@ export function custodyAct(action, advanceTime) {
         return 'Defiance was punished';
     }
     if (action === 'escape') {
+        if (st.activity?.on) st.activity = null; // slipping away from the work is the attempt
         if (c.cool > st.minutes) throw new Error(c.type === 'prison' ? 'you are in solitary: no chance until they let you out' : 'you are chained and watched: no chance yet');
         advanceTime(120);
-        const dc = (c.type === 'prison' ? 17 : 15) - Math.floor(c.trust / 25);
+        const dc = (c.type === 'prison' ? 17 : 14 + ownerKind(c).watch) - Math.floor(c.trust / 25);
         const skill = skillOf(pc, 'stealth') >= skillOf(pc, 'athletics') ? 'stealth' : 'athletics';
         const r = skillCheck(pc, skill, dc);
         if (r.success) {
@@ -327,8 +392,10 @@ export function custodyAct(action, advanceTime) {
     }
     if (action === 'buy') {
         if (c.type !== 'slave') throw new Error('a sentence cannot be bought off');
-        if (c.stash < c.price) throw new Error(`${c.owner} wants ${fmt(c.price)} cr. You have hidden ${fmt(c.stash)} cr`);
-        if (c.trust < 40) throw new Error(`${c.owner} will not hear of it yet`);
+        if (c.trust < 40) throw new Error(`${c.owner} will not hear a word about it from you yet`);
+        if (!c.sells) { c.asked = true; advanceTime(15); c.trust = clamp(c.trust - 5, 0, 100); st.pendingEvent ??= `${pc.name} raised the question of buying their freedom. ${c.owner} made it plain: they do not sell what is theirs, at any price. Narrate the answer.`; throw new Error(`${c.owner} does not sell what is theirs. Not at any price`); }
+        c.asked = true;
+        if (c.stash < c.price) throw new Error(`${c.owner} names a price: ${fmt(c.price)} cr. You have hidden ${fmt(c.stash)} cr`);
         advanceTime(60);
         const r = skillCheck(pc, 'negotiation', 13 - Math.floor(c.trust / 30));
         if (!r.success) { c.cool = Math.max(c.cool, st.minutes + 3 * DAY); c.trust = clamp(c.trust - 10, 0, 100); st.pendingEvent ??= `${pc.name} offered ${c.owner} ${fmt(c.price)} credits for their freedom. ${c.owner} refused, and now wonders where a slave got that kind of money.`; return `${c.owner} refused`; }
@@ -338,8 +405,44 @@ export function custodyAct(action, advanceTime) {
         st.pendingEvent = `${c.owner} has accepted ${fmt(c.price)} credits and struck the collar off: ${pc.name} is free, with ${fmt(pc.credits)} credits and nothing else. Narrate it.`;
         return 'Freedom bought';
     }
-    throw new Error('use: eat, work, defy, escape or buy');
+    throw new Error('use: eat, work, defy, escape, buy, fight or join');
 }
+
+
+registerActivity('detail', {
+    half(st, a) {
+        const c = st.custody;
+        if (c) st.pendingEvent ??= c.type === 'prison' ? `Halfway through the work detail: something happens among the prisoners or with a guard. Play it.` : `Halfway through the day's work for ${c.owner}: an overseer, another slave, or the owner takes notice of ${st.captain.name}. Play it.`;
+    },
+    finish(st) {
+        const c = st.custody, pc = st.captain;
+        if (!c) return '';
+        adjust(pc, 'stress', c.type === 'prison' ? 5 : 9, 0, 100);
+        c.trust = clamp(c.trust + (c.type === 'prison' ? 2 : 3), 0, 100);
+        if (c.type === 'prison') {
+            pc.credits += 15;
+            c.until -= Math.round(0.05 * DAY); // good conduct shaves a little off
+            st.pendingEvent ??= `The work detail is over and ${pc.name} is marched back to the block. Close it in a line or two.`;
+            return 'Worked a prison detail: 15 cr, and a mark for good conduct.';
+        }
+        const o = ownerKind(c);
+        // Favours, errands and things that fall off tables: a trusted slave handles more of them.
+        const tip = Math.random() < o.tips[0] ? Math.round((0.3 + Math.random()) * o.tips[1] * (1 + c.trust / 50)) : 0;
+        c.stash += tip;
+        let hurt = '';
+        if (Math.random() < o.hurt) { damagePart(pc, ['larm', 'rarm', 'lleg', 'rleg'][Math.floor(Math.random() * 4)], 8 + Math.floor(Math.random() * 14)); hurt = ' The work hurt them today.'; }
+        st.pendingEvent ??= `The working day for ${c.owner} is over.${hurt}${tip ? ` ${pc.name} managed to hide away ${tip} credits.` : ''} Close the day in a line or two.`;
+        return `Worked the day for ${c.owner}${tip ? ` and hid away ${tip} cr` : ''}.${hurt}`;
+    },
+    stop(st) {
+        const c = st.custody, pc = st.captain;
+        if (!c) return '';
+        c.trust = clamp(c.trust - 8, 0, 100);
+        damagePart(pc, randomPart(), 6 + Math.floor(Math.random() * 10));
+        st.pendingEvent ??= `${pc.name} stopped working before the day was done and was punished for it.`;
+        return 'Downed tools, and was punished for it.';
+    },
+});
 
 // ---- Getting caught ----
 
@@ -394,6 +497,11 @@ export function financeTick(st) {
     reconcileAfter(st);
     const c = st.custody;
     if (c?.type === 'prison' && st.minutes >= c.until) release(st, 'released');
+    if (c?.type === 'slave' && c.until && st.minutes >= c.until) {
+        st.captain.credits += c.stash;
+        release(st, 'the bond is served');
+        st.pendingEvent = `The term of ${st.captain.name}'s labour bond has run out. The contractor's clerk strikes the name from the book: they are free, with ${fmt(st.captain.credits)} credits put by and nothing else. Narrate it.`;
+    }
     if (c) {
         // Custody feeds you badly but it feeds you: nobody starves to death in a cell.
         for (const n of ['nourishment', 'hydration']) if (st.captain.needs[n] < 12) st.captain.needs[n] = 12;

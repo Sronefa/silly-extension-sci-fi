@@ -362,8 +362,11 @@ const COMMANDS = {
     },
     radiation(st, [v]) { return `Radiation ${applyDelta(st.captain, 'radiation', v, 0, 1000)}`; },
     time(st, [v]) {
-        const mins = parseDuration(v);
+        let mins = parseDuration(v);
         if (!Number.isFinite(mins)) throw new Error(`"${v}" is not a duration`);
+        // The storyteller cannot wind the clock back, and cannot jump over a shift, a lesson
+        // or a day's forced labour: those are lived two hours at a time at most.
+        if (aiMode) mins = clamp(mins, 0, st.activity?.on ? 120 : 24 * 60);
         advanceTime(mins);
         return `Time ${mins >= 0 ? '+' : ''}${Math.round(mins / 6) / 10}h`;
     },

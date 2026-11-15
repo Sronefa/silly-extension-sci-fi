@@ -885,3 +885,6 @@ body.sf-theme ::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.25); }
 /* More tabs than fit: the bar scrolls sideways instead of crushing the labels. */
 .sf-tabs { overflow-x: auto; overflow-y: hidden; flex: 0 0 auto; scrollbar-width: thin; scrollbar-color: var(--sf-line) transparent; }
 .sf-tab { flex: 1 0 auto; min-width: 52px; padding-left: 6px; padding-right: 6px; }
+
+/* Commitments: a shift, a lesson, a day's forced work */
+.sf-act-bar { display: block; margin-top: 6px; height: 3px; }

@@ -3,7 +3,7 @@
 import { S, addLog, adjust, buildShip, cargoUsed } from '../core/state.js';
 import { getGalaxy } from './galaxy.js';
 import { makeRng, hash, clamp, uid } from '../core/util.js';
-import { JOBS, LIVING, LICENCES, licenceForSize } from '../data/life.js';
+import { JOBS, LIVING, LICENCES, licenceForSize, SHIFT_INCIDENTS } from '../data/life.js';
 import { WEAR_PARTS, DOCK_FEE, WEEK, DAY } from '../data/economy.js';
 import { VESSELS, STYLES, hullAccess } from '../data/vessels.js';
 import { ownClass } from '../data/hulls.js';
@@ -12,6 +12,9 @@ import { port, wearOf } from './services.js';
 import { skillOf, skillCheck, gainXp } from './character.js';
 import { shipWorth, financeShip, totalDebt } from './finance.js';
 import { advanceTime } from './sim.js';
+import { book, registerActivity, areaOf, areaName, areasHere, hasSchool } from './activity.js';
+
+export { hasSchool };
 
 const fmt = (n) => Math.round(n).toLocaleString('en-US');
 
@@ -40,36 +43,70 @@ export function jobBoard(st = S()) {
         let why = '';
         if (lvl < j.min) why = `needs ${j.skill} ${j.min}`;
         else if (j.licence && !st.captain.licences?.[j.licence]) why = `needs a ${LICENCES[j.licence].name.toLowerCase()}`;
+        else if (st.activity) why = `you are committed: ${st.activity.name.toLowerCase()}`;
         else if (done >= 2) why = 'you have worked two shifts today';
         else if (st.captain.needs.rest < 15) why = 'you are too exhausted to work';
-        return { ...j, pay, why, overtime: done === 1 };
+        const at = areasHere(st).some(a => a.id === j.at) ? j.at : 'works';
+        return { ...j, at, pay, why, overtime: done === 1 };
     }).sort((a, b) => b.pay - a.pay);
 }
 
-export function workShift(jobId) {
+/**
+ * Signs on for a shift. Nothing happens yet: the character has two hours to get to the
+ * workplace and clock in, and the eight hours are then lived in story time.
+ */
+export function takeShift(jobId) {
     const st = S();
+    const p = port(st);
     const job = jobBoard(st).find(j => j.id === jobId);
     if (!job) throw new Error('that job is not on the board today');
     if (job.why) throw new Error(job.why);
-    if (st.combat || st.shipCombat) throw new Error('not now');
-    const e = econ(st);
-    const day = Math.floor(st.minutes / DAY);
-    e.shifts = e.shifts?.day === day ? e.shifts : { day, n: 0 };
-    e.shifts.n++;
-    advanceTime(480);
-    const r = skillCheck(st.captain, job.skill, 9 + job.min);
-    gainXp(st.captain, job.skill, 4);
-    let pay = job.pay * (r.crit ? 1.25 : r.success ? 1 : 0.7);
-    adjust(st.captain, 'stress', job.overtime ? 10 : 5, 0, 100);
+    book(st, { kind: 'work', id: job.id, name: `Shift as ${job.name.toLowerCase()}`, job: job.name, area: job.at, key: p.key, need: 480, pay: job.pay, skill: job.skill, min: job.min, overtime: job.overtime });
+    const where = areaName(st, job.at).toLowerCase();
+    st.pendingEvent ??= `${st.captain.name} has signed on for an eight hour shift as ${job.name.toLowerCase()} (${job.desc}) at the ${where} of ${p.station.name}. The shift has not started: they have to get there and report within two hours.`;
+    return `Signed on. Report to the ${where} within 2 h and clock in`;
+}
+
+function payWage(st, a, pay, tail) {
     pay = Math.round(pay);
     let kept = pay, note = '';
     if (st.indenture) { kept = Math.round(pay * 0.3); garnish(st, pay - kept); note = `, ${fmt(pay - kept)} cr garnished by Combine Credit`; }
     st.captain.credits += kept;
-    ledger(st, `Wages: ${job.name}`, kept);
-    const text = `Worked a shift as ${job.name.toLowerCase()}: ${fmt(pay)} cr${r.crit ? ' with a bonus for good work' : r.success ? '' : ' after a docked wage for a poor shift'}${note}.`;
-    addLog(text, 'trade');
-    return text;
+    if (kept) ledger(st, `Wages: ${a.job}`, kept);
+    return `${fmt(pay)} cr${tail}${note}`;
 }
+
+registerActivity('work', {
+    start(st, a) {
+        const e = econ(st);
+        const day = Math.floor(st.minutes / DAY);
+        e.shifts = e.shifts?.day === day ? e.shifts : { day, n: 0 };
+        e.shifts.n++;
+        st.pendingEvent ??= `${st.captain.name} has clocked in for the shift as ${a.job.toLowerCase()}. Eight hours of it lie ahead. Open the shift: the foreman or whoever is in charge, the task, the people working alongside.`;
+    },
+    half(st, a) {
+        const what = SHIFT_INCIDENTS[Math.floor(Math.random() * SHIFT_INCIDENTS.length)];
+        st.pendingEvent ??= `Halfway through the shift as ${a.job.toLowerCase()}: ${what}. Play it out.`;
+    },
+    finish(st, a) {
+        const r = skillCheck(st.captain, a.skill, 9 + a.min);
+        gainXp(st.captain, a.skill, 4);
+        adjust(st.captain, 'stress', a.overtime ? 10 : 5, 0, 100);
+        const paid = payWage(st, a, a.pay * (r.crit ? 1.25 : r.success ? 1 : 0.7), r.crit ? ' with a bonus for good work' : r.success ? '' : ' after a docked wage for a poor shift');
+        st.pendingEvent ??= `The shift as ${a.job.toLowerCase()} is over. ${st.captain.name} clocks out and is paid ${paid}. Close the shift in a line or two.`;
+        return `Finished a shift as ${a.job.toLowerCase()}: ${paid}.`;
+    },
+    stop(st, a, why) {
+        const hours = Math.floor(a.done / 60);
+        adjust(st.captain, 'stress', 3, 0, 100);
+        const paid = hours ? payWage(st, a, a.pay * (hours / 8) * 0.85, ` for ${hours} h`) : 'nothing';
+        st.pendingEvent ??= `${st.captain.name} ${why === 'left' ? 'left the workplace and did not come back' : 'walked off the shift'} as ${a.job.toLowerCase()} after ${hours} hours. Paid ${paid}.`;
+        return `Left the shift as ${a.job.toLowerCase()} early: ${paid}.`;
+    },
+    miss(st, a, why) {
+        return why === 'cancelled' ? `Gave the shift as ${a.job.toLowerCase()} back.` : `Did not turn up for the shift as ${a.job.toLowerCase()}.`;
+    },
+});
 
 function garnish(st, amount) {
     const loan = (st.loans ?? []).find(l => l.id === st.indenture?.loan);
@@ -86,6 +123,9 @@ export function living(kind) {
     if (!p) throw new Error('you need to be aboard a station');
     const item = LIVING[kind];
     if (!item) throw new Error('use: meal, bunk or room');
+    if (st.activity?.on) throw new Error(`you are in the middle of something: ${st.activity.name.toLowerCase()}`);
+    const here = areaOf(st);
+    if (kind === 'meal' ? !['concourse', 'habitat'].includes(here) : here !== 'habitat') throw new Error(kind === 'meal' ? 'food is sold on the concourse and in the habitat ring: go there' : 'beds are in the habitat ring: go there');
     spend(st, item.cost, item.name);
     const pc = st.captain;
     if (kind === 'meal') {
@@ -113,7 +153,6 @@ export function licencesNeeded(cls) {
 }
 export const missingLicences = (st, cls) => licencesNeeded(cls).filter(id => !licencesOf(st)[id]);
 
-export function hasSchool(p) { return !!p && p.sys.security >= 2 && p.sys.faction !== 'ashen'; }
 
 export function licenceStatus(st, id) {
     const def = LICENCES[id];
@@ -133,12 +172,17 @@ export function enrol(id) {
     const s = licenceStatus(st, id);
     if (s.why) throw new Error(s.why);
     if (s.course) throw new Error('already enrolled');
+    if (areaOf(st) !== 'school') throw new Error('enrolment is done in person: go to the flight school');
     spend(st, s.def.fee, `Course fee: ${s.def.name}`);
     st.captain.course = { id, lessons: 0, theory: false, day: -1, today: 0 };
     addLog(`Enrolled for the ${s.def.name}.`, 'story');
     return `Enrolled: ${s.def.lessons} lessons, then a written test and a check flight`;
 }
 
+/**
+ * Books the next step of the course: a lesson, the written test or the check flight. It is
+ * held at the flight school and takes its real time.
+ */
 export function courseStep() {
     const st = S();
     const p = port(st);
@@ -146,42 +190,85 @@ export function courseStep() {
     if (!c) throw new Error('you are not enrolled on a course');
     if (!hasSchool(p)) throw new Error('lessons and tests are held at a flight school: dock at a policed station');
     const def = LICENCES[c.id];
-    const pc = st.captain;
     const day = Math.floor(st.minutes / DAY);
     if (c.day !== day) { c.day = day; c.today = 0; }
+    const base = { area: 'school', key: p.key, course: c.id };
     if (c.lessons < def.lessons) {
         if (c.today >= 2) throw new Error('two lessons a day is all the school offers');
-        c.today++; c.lessons++;
-        advanceTime(240);
+        book(st, { ...base, kind: 'lesson', name: `Lesson ${c.lessons + 1} of ${def.lessons}, ${def.name}`, need: 240 });
+        return 'Lesson booked. Be at the flight school within 2 h';
+    }
+    if (c.retry > st.minutes) throw new Error('the examiner will see you again tomorrow');
+    if (c.fail && st.captain.credits < 300) throw new Error('the resit fee is 300 cr');
+    if (!c.theory) book(st, { ...base, kind: 'exam', name: `Written test, ${def.name}`, need: 120, note: 'It is a sat, silent, invigilated paper.' });
+    else book(st, { ...base, kind: 'checkflight', name: `Check flight, ${def.name}`, need: 180, note: 'The examiner sits in the right-hand seat and says little. The flight leaves from and returns to the school; do not change the character\'s area.' });
+    return `${c.theory ? 'Check flight' : 'Written test'} booked. Be at the flight school within 2 h`;
+}
+
+const courseOf = (st, a) => (st.captain.course?.id === a.course ? st.captain.course : null);
+const resit = (st, c) => { if (c.fail) { spend(st, 300, 'Resit fee'); } };
+
+registerActivity('lesson', {
+    start(st, a) {
+        const c = courseOf(st, a);
+        if (c) c.today++;
+        st.pendingEvent ??= `${st.captain.name} has reported for a four hour flying lesson (${a.name}). Play the lesson: the instructor, the classroom or the trainer cockpit, what is being taught today.`;
+    },
+    finish(st, a) {
+        const c = courseOf(st, a);
+        if (!c) return '';
+        const def = LICENCES[c.id], pc = st.captain;
+        c.lessons++;
         gainXp(pc, def.flightSkill ?? 'pilot', 6);
         if (c.lessons % 3 === 0) gainXp(pc, 'navigation', 5);
         // Nobody finishes the course without learning to fly at all.
         if (c.lessons === def.lessons && c.id === 'basic' && (pc.skills.pilot ?? 0) < 1) pc.skills.pilot = 1;
-        return `Lesson ${c.lessons} of ${def.lessons} done (4 h)`;
-    }
-    if (c.retry > st.minutes) throw new Error('the examiner will see you again tomorrow');
-    if (c.fail) spend(st, 300, 'Resit fee');
-    if (!c.theory) {
-        advanceTime(120);
-        const r = skillCheck(pc, 'navigation', def.theoryDc, { mod: 2 });
-        if (!r.success) { c.fail = true; c.retry = st.minutes + DAY; return `Failed the written test (${r.total} against ${def.theoryDc}). Resit tomorrow for 300 cr`; }
-        c.theory = true; c.fail = false;
-        return 'Passed the written test. The check flight is next';
-    }
-    advanceTime(180);
-    const r = skillCheck(pc, def.flightSkill ?? 'pilot', def.flightDc, { mod: 2 + (c.fails ?? 0) });
-    st.lastCheck = { ...r, who: pc.name, text: `${pc.name} ${def.name} check flight: ${r.total} against ${def.flightDc}, ${r.success ? 'passed' : 'failed'}.` };
-    if (!r.success) {
-        c.fail = true; c.retry = st.minutes + DAY; c.fails = (c.fails ?? 0) + 1;
-        st.pendingEvent ??= `${pc.name} has just flown the check flight for the ${def.name} and failed it. Narrate the flight with the examiner and what went wrong.`;
-        return `Failed the check flight (${r.total} against ${def.flightDc}). Resit tomorrow for 300 cr`;
-    }
-    licencesOf(st)[c.id] = { since: st.minutes, issuer: p.sys.faction };
-    pc.course = null;
-    addLog(`Licence granted: ${def.name}.`, 'story');
-    st.pendingEvent ??= `${pc.name} has just passed the check flight and been granted the ${def.name}. Narrate the flight with the examiner and the moment the licence is issued.`;
-    return `Passed. ${def.name} granted`;
+        st.pendingEvent ??= `The lesson is over (${c.lessons} of ${def.lessons} done). Close it in a line or two.`;
+        return `Lesson ${c.lessons} of ${def.lessons} done.`;
+    },
+    stop(st, a) { return `Walked out of a lesson. It does not count.`; },
+    miss(st, a, why) { return why === 'cancelled' ? 'Lesson cancelled.' : 'Missed a booked lesson.'; },
+});
+
+function failed(st, c, def, what, r, dc) {
+    c.fail = true; c.retry = st.minutes + DAY;
+    st.pendingEvent ??= `${st.captain.name} has failed the ${what} for the ${def.name}${r ? ` (${r.total} against ${dc})` : ''}. Narrate how it went wrong. A resit is possible tomorrow for 300 credits.`;
+    return `Failed the ${what}${r ? ` (${r.total} against ${dc})` : ''}. Resit tomorrow for 300 cr.`;
 }
+
+registerActivity('exam', {
+    start(st, a) { const c = courseOf(st, a); if (c) resit(st, c); st.pendingEvent ??= `${st.captain.name} sits down to the two hour written test for the ${LICENCES[a.course].name}. Play the exam room; the result is not known until the game gives it.`; },
+    finish(st, a) {
+        const c = courseOf(st, a);
+        if (!c) return '';
+        const def = LICENCES[c.id];
+        const r = skillCheck(st.captain, 'navigation', def.theoryDc, { mod: 2 });
+        if (!r.success) return failed(st, c, def, 'written test', r, def.theoryDc);
+        c.theory = true; c.fail = false;
+        st.pendingEvent ??= `${st.captain.name} has passed the written test for the ${def.name} (${r.total} against ${def.theoryDc}). The check flight is next.`;
+        return 'Passed the written test. The check flight is next.';
+    },
+    stop(st, a) { const c = courseOf(st, a); return c ? failed(st, c, LICENCES[c.id], 'written test (walked out)') : ''; },
+    miss(st, a, why) { return why === 'cancelled' ? 'Test booking cancelled.' : 'Missed the written test. It will have to be booked again.'; },
+});
+
+registerActivity('checkflight', {
+    start(st, a) { const c = courseOf(st, a); if (c) resit(st, c); st.pendingEvent ??= `${st.captain.name} walks out to the trainer with the examiner for the three hour check flight for the ${LICENCES[a.course].name}. Play the flight as it happens; the result is not known until the game gives it.`; },
+    finish(st, a) {
+        const c = courseOf(st, a);
+        if (!c) return '';
+        const def = LICENCES[c.id], pc = st.captain;
+        const r = skillCheck(pc, def.flightSkill ?? 'pilot', def.flightDc, { mod: 2 + (c.fails ?? 0) });
+        st.lastCheck = { ...r, who: pc.name, text: `${pc.name} ${def.name} check flight: ${r.total} against ${def.flightDc}, ${r.success ? 'passed' : 'failed'}.` };
+        if (!r.success) { c.fails = (c.fails ?? 0) + 1; return failed(st, c, def, 'check flight', r, def.flightDc); }
+        licencesOf(st)[c.id] = { since: st.minutes, issuer: port(st)?.sys.faction ?? null };
+        pc.course = null;
+        st.pendingEvent ??= `${pc.name} has passed the check flight (${r.total} against ${def.flightDc}) and been granted the ${def.name}. Narrate the landing and the moment the licence is issued.`;
+        return `Licence granted: ${def.name}.`;
+    },
+    stop(st, a) { const c = courseOf(st, a); return c ? failed(st, c, LICENCES[c.id], 'check flight (abandoned)') : ''; },
+    miss(st, a, why) { return why === 'cancelled' ? 'Check flight cancelled.' : 'Missed the check flight. It will have to be booked again.'; },
+});
 
 /** Characters who start with a ship, or as trained pilots, already hold the papers for it. */
 export function grantStartingLicences(st) {
@@ -239,22 +326,47 @@ export function yardStock(st = S()) {
 
 export function inspect(offerId, how) {
     const st = S();
+    const p = port(st);
     const offer = yardStock(st)?.used.find(u => u.id === offerId);
     if (!offer) throw new Error('that ship is not for sale here');
     const e = econ(st);
     e.inspected ??= {};
-    if (e.inspected[offerId]) throw new Error('already surveyed');
+    e.surveys ??= {};
+    if (e.inspected[offerId] === 2) throw new Error('already surveyed');
     if (how === 'pay') {
+        if (e.surveys[offerId]) throw new Error('the surveyor is already at work on her');
         const fee = Math.max(150, Math.round(offer.price * 0.015 / 10) * 10);
         spend(st, fee, `Survey: ${offer.name}`);
-        advanceTime(180);
-        e.inspected[offerId] = 2;
-        return `A marine surveyor went through the ${offer.name} (${fmt(fee)} cr, 3 h). Her real condition is on the listing now`;
+        e.surveys[offerId] = { due: st.minutes + 240, name: offer.name };
+        return `A marine surveyor will go through the ${offer.name} (${fmt(fee)} cr). The report comes in about 4 h`;
     }
-    advanceTime(240);
-    const r = skillCheck(st.captain, 'engineering', 13);
-    e.inspected[offerId] = r.success ? 2 : 1;
-    return r.success ? `You went through the ${offer.name} yourself (4 h) and found what there was to find` : `You went through the ${offer.name} yourself (4 h) but could not be sure of what you saw`;
+    if (e.inspected[offerId]) throw new Error('you have already been over her once');
+    book(st, { kind: 'inspect', name: `Inspecting the ${offer.name}`, area: 'yard', key: p.key, need: 240, offer: offerId, ship: offer.name });
+    return `The yard will let you aboard the ${offer.name}. Be at the shipyard within 2 h; going through her takes about 4 h`;
+}
+
+registerActivity('inspect', {
+    start(st, a) { st.pendingEvent ??= `${st.captain.name} is let aboard the ${a.ship}, a used ship for sale, to go through her with a torch and a multimeter. Four hours of crawling through machinery spaces. Play it; what they find is decided by the game at the end.`; },
+    finish(st, a) {
+        const r = skillCheck(st.captain, 'engineering', 13);
+        gainXp(st.captain, 'engineering', 4);
+        (econ(st).inspected ??= {})[a.offer] = Math.max(econ(st).inspected[a.offer] ?? 0, r.success ? 2 : 1);
+        st.pendingEvent ??= r.success ? `${st.captain.name} has finished going through the ${a.ship} and found what there was to find: her true condition is now known (see the listing).` : `${st.captain.name} has finished going through the ${a.ship} but could not be sure of what they saw.`;
+        return r.success ? `Went through the ${a.ship} and found what there was to find.` : `Went through the ${a.ship} but could not be sure of what you saw.`;
+    },
+    stop(st, a) { return `Gave up the inspection of the ${a.ship} half done. Nothing certain was learned.`; },
+    miss(st, a, why) { return why === 'cancelled' ? 'Inspection cancelled.' : `Did not turn up to inspect the ${a.ship}.`; },
+});
+
+/** Surveyors hired at the yard do their own work in their own time. */
+function surveyTick(st) {
+    const e = econ(st);
+    for (const [id, sv] of Object.entries(e.surveys ?? {})) {
+        if (st.minutes < sv.due) continue;
+        delete e.surveys[id];
+        (e.inspected ??= {})[id] = 2;
+        addLog(`The surveyor's report on the ${sv.name} is in.`, 'trade');
+    }
 }
 
 /** What a used listing shows: the seller's story until someone competent has looked. */
@@ -263,7 +375,7 @@ export function listingWear(st, offer) {
     if (level === 2) return { level, wear: offer.wear, hull: offer.hull };
     const wear = {};
     for (const [k, v] of Object.entries(offer.wear)) wear[k] = Math.min(v, 60) - (level ? 0 : 10);
-    return { level, wear, hull: Math.max(offer.hull, 92) };
+    return { level, wear, hull: Math.max(offer.hull, 92), survey: econ(st).surveys?.[offer.id] ?? null };
 }
 
 export function tradeIn(st = S()) {
@@ -292,6 +404,7 @@ export function buyShip(offerId, { finance = false, name = '' } = {}) {
     const stock = yardStock(st);
     const offer = stock && [...stock.new, ...stock.used].find(o => o.id === offerId);
     if (!offer) throw new Error('that ship is not for sale here');
+    if (areaOf(st) !== 'yard') throw new Error('ships are bought in person: go to the shipyard');
     const q = buyQuote(st, offer, { finance });
     if (!q.ok) throw new Error(q.why);
     const old = st.ship;
@@ -322,6 +435,7 @@ export function sellShip() {
     const p = port(st);
     if (!st.ship) throw new Error('you have no ship to sell');
     if (!p || !(p.station.services.includes('shipyard') || p.station.services.includes('repair'))) throw new Error('nobody here buys ships');
+    if (areaOf(st) !== 'yard') throw new Error('take the papers to the shipyard office: go to the shipyard');
     if (cargoUsed(st) > 2) throw new Error('empty the hold first');
     const price = Math.round(tradeIn(st) * (p.station.services.includes('shipyard') ? 1 : 0.8));
     const name = st.ship.name;
@@ -427,6 +541,7 @@ export function paperCheck(st) {
 
 export function lifeTick(st) {
     grantStartingLicences(st);
+    surveyTick(st);
     const e = econ(st);
     const day = Math.floor(st.minutes / DAY);
     if ((e.lifeDay ?? day) < day || (st.laidUp && st.laidUp.paid === 0)) layUpDay(st);
