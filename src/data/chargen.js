@@ -128,8 +128,8 @@ export const CYBERWARE = [
 
 // Small craft: mechs and fighters. Both launch from a carrier or station; different strengths.
 export const CRAFT_CLASSES = {
-    halberd: { id: 'halberd', kind: 'mech', name: 'MF-7 Halberd', role: 'Line combat frame', hull: 160, armor: 8, shields: 40, energy: 100, evasion: 18, speed: 3, weapons: ['Beam Rifle', 'Shoulder Rail', 'Heat Blade'], traits: 'Can fight on surfaces and inside structures. Heavy armor, melee capable.' },
-    lynx: { id: 'lynx', kind: 'mech', name: 'LX-2 Lynx', role: 'Scout frame', hull: 110, armor: 4, shields: 30, energy: 110, evasion: 30, speed: 5, weapons: ['Autocannon', 'Sensor Pod'], traits: 'Fast and quiet. Fragile.' },
+    halberd: { id: 'halberd', kind: 'mech', name: 'MF-7 Halberd', role: 'Line combat frame', hull: 280, armor: 10, shields: 90, energy: 100, evasion: 40, speed: 5, price: 2400000, minSkill: 5, bay: 'mech', weapons: ['Beam Rifle', 'Shoulder Rail', 'Heat Blade'], traits: 'Ultra agile, heavily armored and melee capable. Fights in space, on surfaces and inside structures. Ruinously expensive, needs Mech Piloting 5, and only a dedicated mech bay can repair it.' },
+    lynx: { id: 'lynx', kind: 'mech', name: 'LX-2 Lynx', role: 'Scout frame', hull: 190, armor: 6, shields: 70, energy: 110, evasion: 50, speed: 7, price: 1700000, minSkill: 5, bay: 'mech', weapons: ['Autocannon', 'Sensor Pod'], traits: 'The most agile thing in space, with a scout sensor suite. Ruinously expensive, needs Mech Piloting 5, and only a dedicated mech bay can repair it.' },
     kestrel: { id: 'kestrel', kind: 'fighter', name: 'F-22 Kestrel', role: 'Interceptor', hull: 90, armor: 2, shields: 60, energy: 90, evasion: 40, speed: 8, weapons: ['Twin Pulse Lasers', 'Missile Rails'], traits: 'Space only. Fastest thing in the lane; folds if hit.' },
     harrier: { id: 'harrier', kind: 'fighter', name: 'A-9 Harrow', role: 'Strike craft', hull: 130, armor: 4, shields: 70, energy: 90, evasion: 26, speed: 6, weapons: ['Autocannon', 'Torpedo Bay'], traits: 'Anti-ship ordnance. Needs an escort.' },
 };

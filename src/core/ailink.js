@@ -73,7 +73,7 @@ export function buildTelemetry({ instructions = true } = {}) {
     }
     for (const c of st.craft) {
         const cls = CRAFT_CLASSES[c.classId];
-        L.push(`Assigned ${c.kind} "${c.name}" (${cls?.role ?? c.kind}): Hull ${Math.round(c.hull)}/${c.maxHull}, Shields ${Math.round(c.shields)}/${c.maxShields}, Armor ${c.armor}. Weapons: ${cls?.weapons.join(', ') ?? 'none'}.`);
+        L.push(`Assigned ${c.kind} "${c.name}" (${cls?.role ?? c.kind}): Hull ${Math.round(c.hull)}/${c.maxHull}, Shields ${Math.round(c.shields)}/${c.maxShields}, Armor ${c.armor}. Weapons: ${cls?.weapons.join(', ') ?? 'none'}.${c.kind === 'mech' ? ` Combat frames are rare and ruinously expensive (about ${fmtInt(cls?.price ?? 2000000)} cr), take years to master, and can only be repaired in a dedicated mech bay, not an ordinary hangar. Their pilots are few, highly paid and often famous${skillOf(cap, 'mech') >= 7 ? `; ${cap.name} is a recognised ace` : skillOf(cap, 'mech') < (cls?.minSkill ?? 5) ? `; ${cap.name} is still too green to handle one properly` : ''}.` : ''}`);
     }
     L.push(`${ship ? 'Cargo' : 'Hauled goods'} (${cargoUsed(st)}/${cargoCap(st)} t): ${st.cargo.length ? st.cargo.map(c => `${c.name} x${c.qty}`).join(', ') : 'empty'}`);
     if (st.crew.length) {

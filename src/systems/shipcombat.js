@@ -3,7 +3,8 @@
 // carry a single-seat fighter and a capital ship; size decides how fast a ship answers orders.
 import { S, addLog } from '../core/state.js';
 import { uid, clamp, norm } from '../core/util.js';
-import { SIZES, SC_WEAPONS, ARCS, ROOMS, VESSELS, VESSEL_ALIASES, POSTS, THROTTLES, POWER_PRESETS, PULSE_SECONDS } from '../data/vessels.js';
+import { SIZES, SC_WEAPONS, ARCS, ROOMS, VESSELS, VESSEL_ALIASES, POSTS, THROTTLES, POWER_PRESETS, PULSE_SECONDS, sensorGrade, boardingPods } from '../data/vessels.js';
+import { startCombat, parseEnemies } from './combat.js';
 import { skillOf, gainXp, skillCheck } from './character.js';
 import { applyHit, randomPart, isDead } from './body.js';
 import { advanceTime, killPlayer } from './sim.js';
@@ -12,8 +13,6 @@ const rnd = Math.random;
 const chance = (p) => rnd() < p;
 const pickOne = (arr) => arr[Math.floor(rnd() * arr.length)];
 const rad = (d) => d * Math.PI / 180;
-const HELM = ['heading', 'throttle', 'evasive'];
-const FIRE = ['target', 'weapon', 'missiles', 'called'];
 
 export const SC = () => S()?.shipCombat ?? null;
 export const clsOf = (s) => VESSELS[s.cls];
@@ -86,6 +85,9 @@ function makeShip(classId, { name, side, x, y, heading, crewQ = 3, morale = 0.5 
         power: 'balanced', radar: true, jam: false, decoys: cls.decoys ?? 0, decoyUp: 0, evasive: false, overload: false,
         target: null, called: '', missiles: true, dc: [], crewQ, morale, casualties: 0,
         state: 'active', warp: null, fleet: null, hot: false, lostFor: 0,
+        // The officers at each station. How good they are decides how fast and how well orders are carried out.
+        officers: Object.fromEntries(['helm', 'weapons', 'sensors', 'engineering'].map(d => [d, clamp(crewQ + Math.floor(rnd() * 3) - 1, 1, 8)])),
+        pods: boardingPods(cls),
     };
 }
 
@@ -214,25 +216,53 @@ export function signature(s) {
     if (Object.values(s.rooms).some(r => r.fire)) sig *= 1.2;
     return sig;
 }
-export const helmDelay = (s) => sizeOf(s).helmDelay + (s.rooms.bridge && s.rooms.bridge.hp <= 0 ? 2 : 0);
-export const fireDelay = (s) => sizeOf(s).fireDelay + (s.rooms.cic && s.rooms.cic.hp <= 0 ? 1 : 0);
 export const dcTeams = (s) => Math.max(0, sizeOf(s).dcTeams - (s.casualties > clsOf(s).crew * 0.5 ? 1 : 0));
 /** Pulses an emergency jump needs to spool: bigger drives take longer. */
 export const warpSpool = (s) => 3 + clsOf(s).size;
 export const overheated = (s) => s.heat >= clsOf(s).heat;
 
-/** The skill level steering one domain of a ship: the player's own when they hold that station. */
-function quality(sc, s, domain) {
+/** The skill level working one station of a ship: the player's own when they hold it. */
+export function quality(sc, s, domain) {
     if (s.id === sc.playerShip && POSTS[sc.role]?.can.includes(domain)) {
         const cap = S()?.captain;
         if (cap) {
-            const mech = clsOf(s).mech;
-            const skill = domain === 'helm' ? (mech ? 'mech' : 'pilot') : domain === 'weapons' ? 'gunnery' : domain === 'engineering' ? 'engineering' : 'electronics';
-            return skillOf(cap, skill);
+            const cls = clsOf(s);
+            const skill = domain === 'helm' ? (cls.mech ? 'mech' : 'pilot') : domain === 'weapons' ? 'gunnery' : domain === 'engineering' ? 'engineering' : 'electronics';
+            let q = skillOf(cap, skill);
+            // A combat frame is beyond anyone who has not put the years in.
+            if (cls.minSkill && (domain === 'helm' || domain === 'weapons')) q -= Math.max(0, cls.minSkill - skillOf(cap, 'mech')) * 2;
+            return q;
         }
     }
-    return s.crewQ;
+    return s.officers?.[domain] ?? s.crewQ;
 }
+
+const DOMAIN = {
+    heading: 'helm', throttle: 'helm', evasive: 'helm',
+    target: 'weapons', weapon: 'weapons', missiles: 'weapons', called: 'weapons',
+    radar: 'sensors', jam: 'sensors', decoy: 'sensors',
+    power: 'engineering', overload: 'engineering', dc: 'engineering', warp: 'engineering',
+};
+
+/**
+ * Seconds a station needs to carry out an order. The base depends on the ship's size and on the
+ * station (a sensor officer flips a switch, a gunnery officer has to work a solution, the helm
+ * has to move the whole ship); a good officer does it in half the time, a poor one takes longer.
+ */
+export function orderSeconds(sc, s, domain, { jitter = false } = {}) {
+    if (domain === 'fleet') return 30;
+    const base = sizeOf(s).delay[domain] ?? 0;
+    if (!base) return 0;
+    let t = base * clamp(1.6 - quality(sc, s, domain) * 0.15, 0.45, 1.9);
+    if ((domain === 'helm' || domain === 'sensors') && s.rooms.bridge && s.rooms.bridge.hp <= 0) t *= 2;
+    if (domain === 'weapons' && s.rooms.cic && s.rooms.cic.hp <= 0) t *= 2;
+    if (domain === 'engineering' && s.rooms.reactor?.fire) t *= 1.5;
+    if (s.casualties > clsOf(s).crew * 0.4) t *= 1.3;
+    if (jitter) t *= 0.85 + rnd() * 0.3;
+    return Math.round(t);
+}
+export const helmDelay = (s, sc = SC()) => Math.round(orderSeconds(sc, s, 'helm') / PULSE_SECONDS);
+export const fireDelay = (s, sc = SC()) => Math.round(orderSeconds(sc, s, 'weapons') / PULSE_SECONDS);
 
 function inArc(s, w, target) {
     // A strike craft can bring its nose onto anything within one pulse; the pass itself is abstracted.
@@ -245,7 +275,7 @@ export function evasionOf(sc, t) {
     const cls = clsOf(t);
     if (!cls.speed || !isActive(t)) return 0;
     const frac = clamp(t.speed / cls.speed, 0, 1.3);
-    return Math.round(sizeOf(t).evasion * frac * (0.4 + 0.6 * roomPct(t, 'drives')) + (t.evasive ? 12 * frac : 0) + quality(sc, t, 'helm') * 1.5 * frac);
+    return Math.round((sizeOf(t).evasion * frac * (0.4 + 0.6 * roomPct(t, 'drives')) + (t.evasive ? 12 * frac : 0) + quality(sc, t, 'helm') * 1.5 * frac) * (cls.agile ?? 1));
 }
 
 /** Why a weapon cannot fire at a target right now, or '' when it can. */
@@ -297,29 +327,25 @@ function applyOrder(sc, s, o) {
         case 'weapon': { const w = s.weapons[o.value.n]; if (w) w.on = !!o.value.on; break; }
         case 'missiles': s.missiles = !!o.value; break;
         case 'fleet': s.fleet = o.value; break;
+        case 'power': if (POWER_PRESETS[o.value]) s.power = o.value; break;
+        case 'radar': s.radar = !!o.value; break;
+        case 'jam': if (clsOf(s).jammer) s.jam = !!o.value; break;
+        case 'decoy': if (s.decoys > 0 && s.decoyUp <= 0) { s.decoys--; s.decoyUp = 2; say(sc, `${s.name} launches decoys.`, 'info', feltBy(sc, s)); } break;
+        case 'overload': s.overload = !!o.value; break;
+        case 'dc': s.dc = o.value.filter(id => id === 'weapons' || s.rooms[id]).slice(0, dcTeams(s)); break;
+        case 'warp': s.warp = o.value ? (s.warp ?? warpSpool(s)) : null; break;
         default: break;
     }
 }
 
-/** Issues an order. Helm and fire orders take time to be carried out on large ships. */
+/** Issues an order through the station that owns it. Returns the pulses until it is carried out. */
 export function order(s, type, value, sc = SC()) {
-    const delay = HELM.includes(type) ? helmDelay(s) : FIRE.includes(type) ? fireDelay(s) : type === 'fleet' ? 1 : 0;
+    const delay = Math.round(orderSeconds(sc, s, type === 'fleet' ? 'fleet' : DOMAIN[type], { jitter: true }) / PULSE_SECONDS);
     if (delay <= 0) { applyOrder(sc, s, { type, value }); return 0; }
     s.queue = s.queue.filter(o => !(o.type === type && (type !== 'weapon' || o.value.n === value.n)));
     s.queue.push({ type, value, at: sc.pulse + delay });
     return delay;
 }
-
-/** Instant actions that are not relayed through the chain of command. */
-export const instant = {
-    power(s, preset) { if (POWER_PRESETS[preset]) s.power = preset; },
-    radar(s, on) { s.radar = !!on; },
-    jam(s, on) { if (clsOf(s).jammer) s.jam = !!on; },
-    decoy(s) { if (s.decoys > 0 && s.decoyUp <= 0) { s.decoys--; s.decoyUp = 2; return true; } return false; },
-    overload(s) { s.overload = true; },
-    dc(s, list) { s.dc = list.filter(id => id === 'weapons' || s.rooms[id]).slice(0, dcTeams(s)); },
-    warp(s, on) { s.warp = on ? (s.warp ?? warpSpool(s)) : null; },
-};
 
 // ---------------------------------------------------------------------------------------
 // Sensors
@@ -356,7 +382,48 @@ function updateTracks(sc, first = false) {
                 else if (level === 0) say(sc, `Contact lost: ${t.name}.`, 'warn');
             }
             sc.tracks[side][t.id] = level;
+            // A poor sensor suite can misread what it is looking at until it has a firing solution.
+            if (side === 'ally' && level === 2 && prev < 2 && t.state === 'active') {
+                const grade = Math.max(...mine.map(o => sensorGrade(clsOf(o))), 1);
+                sc.misid ??= {};
+                if (chance([0, 0.4, 0.18, 0.05, 0.01][grade])) {
+                    const size = clsOf(t).size;
+                    const wrong = Object.values(VESSELS).filter(v => Math.abs(v.size - size) <= 1 && v.id !== t.cls && v.speed);
+                    if (wrong.length) sc.misid[t.id] = pickOne(wrong).role;
+                } else delete sc.misid[t.id];
+            }
+            if (side === 'ally' && level >= 3 && sc.misid?.[t.id]) { say(sc, `Reclassified: the ${sc.misid[t.id].toLowerCase()} is ${t.name}.`, 'warn'); delete sc.misid[t.id]; }
         }
+    }
+    updateGhosts(sc);
+}
+
+/**
+ * False tracks on the player's side of the plot. Civilian sensors throw them all the time,
+ * military ones rarely, and an enemy jammer makes everything worse. A ghost looks exactly like
+ * a faint real contact until it fades or something gets close enough to see there is nothing there.
+ */
+function updateGhosts(sc) {
+    sc.ghosts ??= [];
+    const mine = sc.ships.filter(s => s.side === 'ally' && isActive(s) && sensorRange(s) > 0);
+    if (!mine.length) { sc.ghosts = []; return; }
+    for (const g of sc.ghosts) {
+        g.x += Math.sin(rad(g.heading)) * g.speed; g.y -= Math.cos(rad(g.heading)) * g.speed;
+        g.ttl--;
+        const seenThrough = mine.some(o => dist(o, g) <= sensorRange(o) * (0.2 + quality(sc, o, 'sensors') * 0.03));
+        if (g.ttl <= 0 || seenThrough) { g.dead = true; say(sc, seenThrough ? 'Contact resolved as a sensor ghost. Nothing there.' : 'A contact fades from the plot.', 'dim'); }
+    }
+    sc.ghosts = sc.ghosts.filter(g => !g.dead);
+    const best = mine.sort((a, b) => sensorGrade(clsOf(b)) - sensorGrade(clsOf(a)))[0];
+    const grade = sensorGrade(clsOf(best));
+    const jammed = sc.ships.some(s => s.side === 'enemy' && isActive(s) && s.jam);
+    let p = [0, 0.14, 0.07, 0.02, 0.004][grade] * (jammed ? 3 : 1) * (1.6 - roomPct(best, 'sensors') * 0.6) * clamp(1.5 - quality(sc, best, 'sensors') * 0.12, 0.5, 1.5);
+    if (sc.ghosts.length >= 3) p = 0;
+    if (chance(p)) {
+        const r = sensorRange(best) * (0.6 + rnd() * 0.5);
+        const b = rad(rnd() * 360);
+        sc.ghosts.push({ id: uid('g'), x: best.x + Math.sin(b) * r, y: best.y - Math.cos(b) * r, heading: rnd() * 360, speed: 40 + rnd() * 120, ttl: 2 + Math.floor(rnd() * (grade <= 1 ? 8 : 4)) });
+        say(sc, `New contact bearing ${Math.round(b * 180 / Math.PI).toString().padStart(3, '0')}.`, 'info');
     }
 }
 
@@ -546,6 +613,7 @@ function aiWeapons(sc, s) {
     if (s.fleet?.type === 'engage' && shipById(s.fleet.target, sc) && isActive(shipById(s.fleet.target, sc))) {
         if (s.target !== s.fleet.target && !pendingOrders(s, ['target']).length) order(s, 'target', s.fleet.target, sc);
     } else if (id !== s.target && !pendingOrders(s, ['target']).length) order(s, 'target', id, sc);
+    if (clsOf(s).pirate && s.pods > 0 && t && clsOf(t).size >= 2) s.called = 'drives'; else if (clsOf(s).pirate) s.called = '';
     const hold = s.fleet?.type === 'hold';
     if (s.missiles === hold) s.missiles = !hold;
     for (const w of s.weapons) if (w.on === hold) w.on = !hold;
@@ -716,6 +784,80 @@ function pointDefence(sc, t, incoming) {
     return killed;
 }
 
+/** How a boarding fight goes when nobody the player controls is in it: numbers and quality. */
+function crewRepels(t, boarders) {
+    const cls = clsOf(t);
+    const hands = Math.max(1, (cls.crew - t.casualties) * 0.25) * (0.8 + t.crewQ * 0.1);
+    const won = chance(hands / (hands + boarders * 1.3));
+    t.casualties += Math.round(boarders * (won ? 0.4 : 0.8));
+    return won;
+}
+
+function boardShip(sc, t, boarders, from, shot) {
+    const felt = feltBy(sc, t);
+    const cls = from ? clsOf(from) : null;
+    say(sc, `${shot ? `${shot} pod${shot > 1 ? 's' : ''} destroyed, but boarders` : 'Boarders'} from ${from?.name ?? 'the enemy'} are through the hull of ${t.name}: about ${boarders} of them.`, t.side === 'ally' ? 'bad' : 'good', true);
+    if (felt) {
+        // The player gets one pulse to decide whether to go and meet them.
+        sc.boardingPending = { n: boarders, from: from?.name ?? 'the enemy', kind: cls?.pirate ? 'pirate' : 'marine', at: sc.pulse };
+        return;
+    }
+    if (crewRepels(t, boarders)) say(sc, `${t.name}'s crew throw the boarders back.`, t.side === 'ally' ? 'good' : 'bad');
+    else { t.state = 'surrendered'; say(sc, `${t.name} has been taken by boarding.`, t.side === 'ally' ? 'bad' : 'good', true); }
+}
+
+/** The player goes to meet the boarders in person: this hands over to on-foot combat. */
+export function joinBoardingDefence() {
+    const st = S();
+    const sc = st?.shipCombat;
+    const b = sc?.boardingPending;
+    if (!b) return;
+    const ps = playerShip(sc);
+    startCombat({ scene: `Aboard ${ps.name}, corridor`, groups: parseEnemies([b.kind, String(clamp(b.n, 2, 6))]) });
+    sc.boarding = b;
+    sc.boardingPending = null;
+}
+
+function resolveBoarding(sc, st) {
+    const ps = playerShip(sc);
+    if (sc.boarding) {
+        // The fight on the decks was played out on foot.
+        const won = st.lastCombat?.result === 'victory';
+        sc.boarding = null;
+        st.lastCombat = null;
+        if (st.pendingEvent?.startsWith('COMBAT RESULT')) st.pendingEvent = null;
+        if (won) { say(sc, `The boarders are beaten back. ${ps.name} is still yours.`, 'good', true); return true; }
+        say(sc, `The boarders hold the ship. ${ps.name} is taken.`, 'bad', true);
+        return false;
+    }
+    if (sc.boardingPending) {
+        const b = sc.boardingPending;
+        sc.boardingPending = null;
+        if (crewRepels(ps, b.n)) { say(sc, `The crew of ${ps.name} fight the boarders to a standstill and throw them back.`, 'good', true); return true; }
+        say(sc, `The boarders fight their way to the bridge. ${ps.name} is taken.`, 'bad', true);
+        return false;
+    }
+    return true;
+}
+
+/** Pirates want the prize intact, and marines take ships that cannot run. */
+function aiBoarding(sc, s) {
+    if (!isActive(s) || !(s.pods > 0) || s.fleeing) return;
+    const cls = clsOf(s);
+    const t = sc.ships.filter(o => o.side !== s.side && (isActive(o) || o.state === 'disabled') && clsOf(o).size >= 2 && dist(s, o) <= SC_WEAPONS.pod.range && (sc.tracks[s.side][o.id] ?? 0) >= 2)
+        .sort((a, b) => dist(s, a) - dist(s, b))[0];
+    if (!t || sc.missiles.some(m => m.wid === 'pod' && m.target === t.id)) return;
+    if (feltBy(sc, t) && (sc.boardingPending || sc.boarding)) return;
+    const open = t.shield <= 0 || t.shieldDown > 0;
+    const crippled = t.state === 'disabled' || topSpeed(t) < clsOf(t).speed * 0.4 || t.hull < t.maxHull * 0.4;
+    if (!open) return;
+    if (!(crippled || (cls.pirate && chance(0.35)) || chance(0.1))) return;
+    const n = crippled ? Math.min(s.pods, 2) : 1;
+    s.pods -= n;
+    for (let i = 0; i < n; i++) sc.missiles.push({ id: uid('m'), side: s.side, from: s.id, target: t.id, wid: 'pod', x: s.x, y: s.y, hp: SC_WEAPONS.pod.hp, fuel: 6 });
+    say(sc, `${s.name} launches ${n > 1 ? `${n} boarding pods` : 'a boarding pod'} at ${t.name}.`, s.side === 'ally' ? 'info' : 'warn', feltBy(sc, t));
+}
+
 function stepMissiles(sc) {
     const arrivals = new Map();
     for (const m of sc.missiles) {
@@ -728,9 +870,20 @@ function stepMissiles(sc) {
         const b = rad(bearing(m, t));
         m.x += Math.sin(b) * def.speed; m.y -= Math.cos(b) * def.speed;
     }
-    for (const [tid, list] of arrivals) {
+    for (const [tid, all] of arrivals) {
         const t = shipById(tid, sc);
         const felt = feltBy(sc, t);
+        const pods = all.filter(m => m.wid === 'pod');
+        const list = all.filter(m => m.wid !== 'pod');
+        if (pods.length) {
+            const shot = pointDefence(sc, t, pods);
+            const landed = pods.filter(m => m.hp > 0).length;
+            for (const m of pods) m.dead = true;
+            const from = shipById(pods[0].from, sc);
+            if (!landed) say(sc, `Boarding pods from ${from?.name ?? 'the enemy'} are shot apart short of ${t.name}.`, t.side === 'ally' ? 'good' : 'bad', felt);
+            else boardShip(sc, t, landed * 4, from, shot);
+        }
+        if (!list.length) continue;
         const jam = sc.ships.some(s => s.side === t.side && isActive(s) && s.jam && dist(s, t) <= 500);
         let seduced = 0;
         const logAt = sc.log.length;
@@ -882,6 +1035,9 @@ export function runPulse() {
     const st = S();
     const sc = st?.shipCombat;
     if (!sc || sc.over) return null;
+    if (st.combat) return null; // the fight on the decks comes first
+    if (st.dead) { sc.playerKilled = true; finishShipCombat('killed'); return 'killed'; }
+    if (!resolveBoarding(sc, st)) { finishShipCombat('boarded'); return 'boarded'; }
     sc.pulse++;
     const ps = playerShip(sc);
     const can = POSTS[sc.role]?.can ?? [];
@@ -916,6 +1072,7 @@ export function runPulse() {
     updateTracks(sc);
     // 4. Guns and beams, missile launches, then missiles in flight and point defence.
     for (const s of sc.ships) fireShip(sc, s);
+    for (const s of sc.ships) if (s.side === 'enemy') aiBoarding(sc, s);
     stepMissiles(sc);
     for (const s of sc.ships) pdVersusCraft(sc, s);
     // 5. Heat, shields, fires, damage control, jumps.
@@ -1018,7 +1175,7 @@ export function finishShipCombat(result) {
     const lines = [];
     const headline = {
         victory: 'The enemy force was defeated', 'enemy-withdrew': 'The enemy broke off and escaped', destroyed: sc.abandoned ? `${ps.name} was abandoned` : `${ps.name} was destroyed`,
-        surrendered: `${ps.name} surrendered`, escaped: `${ps.name} escaped the battle`, disabled: `${ps.name} was left dead in space`, killed: `${cap.name} was killed aboard ${ps.name}`, aborted: 'The battle was broken off',
+        surrendered: `${ps.name} surrendered`, boarded: `${ps.name} was taken by boarding`, escaped: `${ps.name} escaped the battle`, disabled: `${ps.name} was left dead in space`, killed: `${cap.name} was killed aboard ${ps.name}`, aborted: 'The battle was broken off',
     }[result];
     lines.push(`${headline} after ${Math.max(1, Math.round(sc.pulse * PULSE_SECONDS / 60))} minutes at ${sc.scene}. ${cap.name} served as ${roleName.toLowerCase()} aboard ${ps.name}.`);
     lines.push(`Own ship: ${describeShip(ps)}.`);
@@ -1041,7 +1198,7 @@ export function finishShipCombat(result) {
             fate = `${cap.name} got away in ${clsOf(ps).size === 1 ? 'an ejection capsule' : 'an escape pod'} and is adrift with a distress beacon and a few days of air. ${lead ? `${lead.name} holds the field: decide whether they recover the pod (as ${kind === 'pirate' ? 'a prisoner to ransom or sell into slavery' : 'a prisoner'}), ignore it, or whether someone else answers the beacon.` : 'No hostile ship remains; decide who answers the beacon, and when.'}`;
         }
         lossOfShip();
-    } else if (result === 'surrendered' || result === 'disabled') {
+    } else if (result === 'surrendered' || result === 'disabled' || result === 'boarded') {
         if (kind === 'pirate') {
             const lootCr = Math.round(cap.credits * (0.3 + rnd() * 0.4));
             const hadCargo = st.cargo.length > 0;
@@ -1051,7 +1208,7 @@ export function finishShipCombat(result) {
                 : roll < 0.8 ? `They take prisoners for ransom, ${cap.name} among them, and put a prize crew aboard.`
                     : `They clap the survivors in irons to be sold as slaves, ${cap.name} among them, and take the ship as a prize.`;
             if (roll >= 0.5 && sc.own) st.shipSeized = true;
-            fate = `Boarded by the crew of ${lead.name}. ${sc.own || sc.craft ? `${hadCargo ? 'The cargo is looted' : 'The hold was empty'}${lootCr ? ` and ${lootCr} credits are taken` : ''}. ` : ''}${outcome}`;
+            fate = `${result === 'boarded' ? 'Taken in a fight on the decks' : 'Boarded'} by the crew of ${lead.name}. ${sc.own || sc.craft ? `${hadCargo ? 'The cargo is looted' : 'The hold was empty'}${lootCr ? ` and ${lootCr} credits are taken` : ''}. ` : ''}${outcome}`;
         } else if (kind === 'lawful') {
             fate = `Boarded by a party from ${lead.name}. The ship is searched, contraband is seized, and ${sc.own ? `${cap.name} is held to answer for it` : 'the captain is held to answer for it'}. Decide the charges and what happens next.`;
         } else if (lead) {

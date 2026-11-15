@@ -5,10 +5,10 @@ import { registerTab, registerWidget, registerActions, gauge, btn, openHud, redr
 import { S, commit, onChange, addLog } from '../core/state.js';
 import { toast, ctx, settings } from '../core/st.js';
 import { esc, clamp, fmtInt } from '../core/util.js';
-import { SIZES, SC_WEAPONS, ARC_NAMES, ROOMS, VESSELS, POSTS, THROTTLES, POWER_PRESETS, TRACK_NAMES, PULSE_SECONDS } from '../data/vessels.js';
+import { SIZES, SC_WEAPONS, ARC_NAMES, ROOMS, VESSELS, POSTS, THROTTLES, POWER_PRESETS, TRACK_NAMES, PULSE_SECONDS, sensorGrade, GRADE_NAMES } from '../data/vessels.js';
 import {
     SC, clsOf, sizeOf, shipById, playerShip, isActive, dist, bearing, angDiff, playerPost, clearance, resolveClass,
-    startShipCombatFromTokens, runPulse, order, instant, pendingOrders, weaponBlock, hitChance, helmDelay, fireDelay, dcTeams, autoDc,
+    startShipCombatFromTokens, runPulse, order, pendingOrders, weaponBlock, hitChance, orderSeconds, quality, joinBoardingDefence, dcTeams, autoDc,
     topSpeed, sensorRange, signature, roomPct, warpSpool, playerSurrender, abandonShip, demandSurrender, setFleetOrder,
     abortShipCombat, salvagePrize,
 } from '../systems/shipcombat.js';
@@ -23,6 +23,8 @@ const hasConsole = (st) => !!st.shipCombat && (POSTS[st.shipCombat.role]?.can.le
 const clock = (pulses) => { const s = pulses * PULSE_SECONDS; return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 const deg = (n) => String(Math.round(((n % 360) + 360) % 360)).padStart(3, '0');
 const off = (ok) => !ok;
+const secs = (n) => (n < 15 ? 'at once' : n < 90 ? `in about ${Math.round(n / 5) * 5} seconds` : `in about ${clock(Math.round(n / PULSE_SECONDS))}`);
+const rating = (q) => (q >= 7 ? 'superb' : q >= 5 ? 'sharp' : q >= 3 ? 'competent' : q >= 2 ? 'green' : 'out of their depth');
 
 // ---- The plot ---------------------------------------------------------------------------
 
@@ -34,7 +36,7 @@ function glyph(s, level, mine, sel, k) {
     if (foe && level === 1) {
         return `<g class="${cls} blip"${attr} transform="translate(${s.x.toFixed(1)} ${s.y.toFixed(1)})"><rect x="${-6 * k}" y="${-6 * k}" width="${12 * k}" height="${12 * k}" transform="rotate(45)"/><text y="${4 * k}" font-size="${10 * k}">?</text><circle class="hit" r="${18 * k}"/></g>`;
     }
-    const label = foe && level === 2 ? clsOf(s).role : s.name;
+    const label = foe && level === 2 ? (SC()?.misid?.[s.id] ?? clsOf(s).role) : s.name;
     const hull = !foe || level >= 3 ? ` ${Math.max(0, Math.round(100 * s.hull / s.maxHull))}%` : '';
     return `<g class="${cls}"${attr} transform="translate(${s.x.toFixed(1)} ${s.y.toFixed(1)})">
         ${mine ? `<circle class="ring" r="${size * 1.5}"/>` : ''}${sel ? `<circle class="reticle" r="${size * 1.7}"/>` : ''}
@@ -46,7 +48,8 @@ function plotSvg(sc) {
     const ps = playerShip(sc);
     const tracks = sc.tracks.ally;
     const shown = sc.ships.filter(s => s.state !== 'escaped' && (s.side === 'ally' || (tracks[s.id] ?? 0) >= 1));
-    const xs = shown.map(s => s.x), ys = shown.map(s => s.y);
+    const pts = [...shown, ...(sc.ghosts ?? [])];
+    const xs = pts.map(s => s.x), ys = pts.map(s => s.y);
     let minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
     const span = Math.max(maxX - minX, maxY - minY, 600) * 1.3 + 200;
     const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
@@ -74,8 +77,9 @@ function plotSvg(sc) {
         .map(m => `<circle class="msl ${m.side === 'ally' ? 'friend' : 'foe'}" cx="${m.x.toFixed(1)}" cy="${m.y.toFixed(1)}" r="${3 * k}"/>`).join('');
     const ships = shown.sort((a, b) => (a.id === sc.playerShip) - (b.id === sc.playerShip))
         .map(s => glyph(s, s.side === 'ally' ? 3 : tracks[s.id] ?? 0, s.id === sc.playerShip, ps?.target === s.id, k)).join('');
+    const ghosts = (sc.ghosts ?? []).map(g => `<g class="sf-ship foe blip" transform="translate(${g.x.toFixed(1)} ${g.y.toFixed(1)})"><rect x="${-6 * k}" y="${-6 * k}" width="${12 * k}" height="${12 * k}" transform="rotate(45)"/><text y="${4 * k}" font-size="${10 * k}">?</text></g>`).join('');
     return `<svg class="sf-plot" viewBox="${vb.map(n => n.toFixed(0)).join(' ')}" data-sf="sc-plot" style="--k:${k.toFixed(2)}">
-        <g class="grid">${grid}</g>${rings}${missiles}${ships}</svg>
+        <g class="grid">${grid}</g>${rings}${missiles}${ghosts}${ships}</svg>
         <div class="sf-field-legend"><span>grid ${fmtInt(step)} km</span><span><i class="l-ally"></i>friendly</span><span><i class="l-foe"></i>hostile</span>${can('helm', sc) ? '<span>tap the plot to set a course</span>' : ''}</div>`;
 }
 
@@ -87,18 +91,22 @@ function timeHtml(st, sc) {
         ${can('command', sc) ? `<div class="sf-actions">${btn('sc-surrender', 'Surrender the ship', { icon: 'fa-flag', cls: 'ghost' })}${btn('sc-refuse', 'Refuse', { icon: 'fa-hand', cls: 'primary' })}</div>` : '<small class="sf-dim">The answer is the captain\'s to give.</small>'}` : '';
     return `<div class="sf-turn-head"><b>${esc(POSTS[sc.role]?.name ?? 'Aboard')}</b> <small>${esc(ps.name)} · ${esc(clsOf(ps).role)}</small><span class="sf-grow"></span><small>T+${clock(sc.pulse)}</small></div>
         ${ps.state !== 'active' ? `<div class="sf-note">${ps.state === 'disabled' ? 'The ship is dead in space.' : esc(ps.state)}</div>` : ''}${hail}
-        <div class="sf-actions">${btn('sc-run', 'Run 30 seconds', { icon: 'fa-forward-step', cls: 'primary wide', data: { n: 1 } })}${btn('sc-run', '2 min', { icon: 'fa-forward', data: { n: 4 }, title: 'Runs four pulses, stopping early if something needs your attention' })}</div>`;
+        ${sc.boardingPending ? `<div class="sf-check-result fail"><b>BOARDERS</b><small>About ${sc.boardingPending.n} from ${esc(sc.boardingPending.from)} are aboard.</small></div>
+            <div class="sf-actions">${btn('sc-repel', 'Go and meet them', { icon: 'fa-person-rifle', cls: 'primary', title: 'Fight them on foot, yourself' })}</div><small class="sf-dim">Or carry on at your post and leave it to the crew: it is settled in the next 30 seconds.</small>` : ''}
+        ${st.combat ? '<div class="sf-note">There is fighting on the decks. Finish it on the Combat tab before the battle moves on.</div>' : ''}
+        <div class="sf-actions">${btn('sc-run', 'Run 30 seconds', { icon: 'fa-forward-step', cls: 'primary wide', data: { n: 1 }, disabled: !!st.combat })}${btn('sc-run', '2 min', { icon: 'fa-forward', data: { n: 4 }, title: 'Runs four pulses, stopping early if something needs your attention' })}</div>`;
 }
 
 function helmHtml(st, sc) {
     const ps = playerShip(sc);
     const ok = live(sc);
-    const d = helmDelay(ps);
+    const d = orderSeconds(sc, ps, 'helm');
+    const mine = can('helm', sc) && S().shipCombat.role !== 'captain' && S().shipCombat.role !== 'commander';
     const q = pendingOrders(ps, ['heading', 'throttle', 'evasive']);
     const qText = q.map(o => `${o.type === 'heading' ? `come to ${deg(o.value)}` : o.type === 'throttle' ? THROTTLES[o.value].name.toLowerCase() : o.value ? 'evasive' : 'steady'} in ${clock(o.at - sc.pulse)}`).join(', ');
     const t = shipById(ps.target, sc);
     return `<div class="sf-sub">Heading ${deg(ps.heading)}${Math.abs(angDiff(ps.want.heading, ps.heading)) > 1 ? ` → ${deg(ps.want.heading)}` : ''} · ${Math.round(ps.speed)} of ${Math.round(clsOf(ps).speed)} km per pulse</div>
-        <small class="sf-dim">${d ? `The helm answers in ${clock(d)}. ` : 'The helm answers at once. '}Turns ${Math.round(sizeOf(ps).turn)}° per pulse.</small>
+        <small class="sf-dim">${clsOf(ps).size === 1 || mine ? 'You have the controls: the ship answers' : `Your helm officer is ${rating(ps.officers.helm)}: the ship answers`} ${secs(d)}. Turns ${Math.round(sizeOf(ps).turn)}° per pulse.</small>
         ${qText ? `<div class="sf-note">Orders in hand: ${esc(qText)}.</div>` : ''}
         <div class="sf-actions">
             ${btn('sc-turn', '45° port', { icon: 'fa-rotate-left', data: { d: -45 }, disabled: off(ok) })}${btn('sc-turn', '15°', { icon: 'fa-rotate-left', data: { d: -15 }, disabled: off(ok) })}
@@ -133,10 +141,10 @@ function weaponsHtml(st, sc) {
             <small class="sf-dim">${ARC_NAMES[list[0].arc]} · ${fmtInt(def.range)} km${ammo}</small><br><small class="${blocked ? 'sf-warn-line' : 'sf-ok-line'}">${esc(status)}</small></span>
             ${btn('sc-weapon', w.on ? 'Free' : 'Held', { cls: w.on ? 'primary' : 'ghost', data: { key: `${list[0].id}:${list[0].arc}` }, disabled: off(ok && up.length) })}</li>`;
     }).join('');
-    const d = fireDelay(ps);
-    return `${d ? `<small class="sf-dim">Fire orders reach the batteries in ${clock(d)}.</small>` : ''}
+    const d = orderSeconds(sc, ps, 'weapons');
+    return `${clsOf(ps).size > 1 ? `<small class="sf-dim">${sc.role === 'gunnery' ? 'You work the solutions yourself: fire orders take effect' : `Your gunnery officer is ${rating(ps.officers.weapons)}: fire orders take effect`} ${secs(d)}.</small>` : ''}
         <label class="sf-field"><span>Target</span><select class="sf-input" data-sf-change="sc-target-sel"${ok ? '' : ' disabled'}>
-            <option value="">No target</option>${foes.map(f => `<option value="${f.id}"${f.id === (qT?.value ?? ps.target) ? ' selected' : ''}>${esc((tracks[f.id] ?? 0) >= 2 ? f.name : 'Unknown contact')} · ${fmtInt(dist(ps, f))} km · ${esc(TRACK_NAMES[tracks[f.id] ?? 0].toLowerCase())}</option>`).join('')}</select></label>
+            <option value="">No target</option>${foes.map(f => `<option value="${f.id}"${f.id === (qT?.value ?? ps.target) ? ' selected' : ''}>${esc((tracks[f.id] ?? 0) >= 3 ? f.name : (tracks[f.id] ?? 0) >= 2 ? (sc.misid?.[f.id] ?? clsOf(f).role) : 'Unknown contact')} · ${fmtInt(dist(ps, f))} km · ${esc(TRACK_NAMES[tracks[f.id] ?? 0].toLowerCase())}</option>`).join('')}</select></label>
         ${qT ? `<div class="sf-note">Target change in ${clock(qT.at - sc.pulse)}.</div>` : ''}
         <label class="sf-field"><span>Aim for</span><select class="sf-input" data-sf-change="sc-called"${ok ? '' : ' disabled'}>
             ${[['', 'Centre of mass'], ['drives', 'Drives'], ['weapons', 'Weapon mounts'], ['reactor', 'Reactor'], ['sensors', 'Sensor array'], ['bridge', 'Bridge'], ['shields', 'Shield emitters']].map(([v, n]) => `<option value="${v}"${ps.called === v ? ' selected' : ''}>${n}${v ? ' (harder)' : ''}</option>`).join('')}</select></label>
@@ -179,19 +187,21 @@ function sensorsHtml(st, sc) {
     const seen = sc.tracks.enemy[ps.id] ?? 0;
     const rows = sc.ships.filter(s => s.side === 'enemy' && s.state !== 'escaped' && (tracks[s.id] ?? 0) >= 1).map(s => {
         const l = tracks[s.id];
-        return `<li class="sf-row" data-sf="sc-target" data-id="${s.id}"><span class="sf-grow"><b>${esc(l >= 2 ? (l >= 3 ? s.name : clsOf(s).role) : 'Unknown contact')}</b>
-            <small class="sf-dim">bearing ${deg(bearing(ps, s))} · ${fmtInt(dist(ps, s))} km${l >= 2 ? ` · ${esc(SIZES[clsOf(s).size].name.toLowerCase())}` : ''}${l >= 3 ? ` · hull ${Math.max(0, Math.round(100 * s.hull / s.maxHull))}%${s.shield > 0 ? ', shields up' : ', shields down'}${s.state !== 'active' ? `, ${s.state}` : ''}` : ''}</small></span>
+        return `<li class="sf-row" data-sf="sc-target" data-id="${s.id}"><span class="sf-grow"><b>${esc(l >= 2 ? (l >= 3 ? s.name : (sc.misid?.[s.id] ?? clsOf(s).role)) : 'Unknown contact')}</b>
+            <small class="sf-dim">bearing ${deg(bearing(ps, s))} · ${fmtInt(dist(ps, s))} km${l >= 3 ? ` · ${esc(SIZES[clsOf(s).size].name.toLowerCase())}` : ''}${l >= 3 ? ` · hull ${Math.max(0, Math.round(100 * s.hull / s.maxHull))}%${s.shield > 0 ? ', shields up' : ', shields down'}${s.state !== 'active' ? `, ${s.state}` : ''}` : ''}</small></span>
             <span class="sf-tag t${l}">${esc(TRACK_NAMES[l])}</span></li>`;
     }).join('');
     const inbound = sc.missiles.filter(m => m.side === 'enemy' && m.target === ps.id).length;
-    return `<small class="sf-dim">Your ship is ${loud}. ${seen >= 3 ? 'The enemy has a firing solution on you.' : seen === 2 ? 'The enemy has you classified.' : seen === 1 ? 'The enemy has a faint contact on you.' : 'The enemy does not appear to see you.'}</small>
+    const ghostRows = (sc.ghosts ?? []).map(g => `<li class="sf-row"><span class="sf-grow"><b>Unknown contact</b> <small class="sf-dim">bearing ${deg(bearing(ps, g))} · ${fmtInt(dist(ps, g))} km</small></span><span class="sf-tag t1">${esc(TRACK_NAMES[1])}</span></li>`).join('');
+    const grade = sensorGrade(clsOf(ps));
+    return `<small class="sf-dim">${esc(GRADE_NAMES[grade][0].toUpperCase() + GRADE_NAMES[grade].slice(1))} sensor suite${grade <= 2 ? ': expect false contacts and wrong identifications' : ''}. Your ship is ${loud}. ${seen >= 3 ? 'The enemy has a firing solution on you.' : seen === 2 ? 'The enemy has you classified.' : seen === 1 ? 'The enemy has a faint contact on you.' : 'The enemy does not appear to see you.'}</small>
         ${inbound ? `<div class="sf-check-result fail"><b>VAMPIRE</b><small>${inbound} missile${inbound > 1 ? 's' : ''} inbound</small></div>` : ''}
         <div class="sf-actions">
             ${btn('sc-radar', ps.radar ? 'Radar: active' : 'Radar: silent', { icon: 'fa-satellite-dish', cls: ps.radar ? 'primary' : '', disabled: off(ok), title: 'Active radar sees far and is seen from farther' })}
             ${clsOf(ps).jammer ? btn('sc-jam', ps.jam ? 'Jammer: on' : 'Jammer: off', { icon: 'fa-tower-broadcast', cls: ps.jam ? 'primary' : '', disabled: off(ok), title: 'Degrades enemy tracks on ships near you. They will know something is out here.' }) : ''}
             ${btn('sc-decoy', ps.decoyUp > 0 ? 'Decoys out' : `Decoys (${ps.decoys})`, { icon: 'fa-burst', disabled: off(ok && ps.decoys > 0 && ps.decoyUp <= 0), title: 'Seduces incoming missiles for the next minute' })}
         </div>
-        <ul class="sf-list">${rows || '<li class="sf-dim">No contacts.</li>'}</ul>`;
+        <ul class="sf-list">${rows + ghostRows || '<li class="sf-dim">No contacts.</li>'}</ul>`;
 }
 
 function commandHtml(st, sc) {
@@ -206,7 +216,8 @@ function commandHtml(st, sc) {
             <select class="sf-input sf-narrow" data-sf-change="sc-fleet" data-id="${a.id}"${isActive(a) ? '' : ' disabled'}>
                 ${[['free', 'Fight at will'], ['screen', 'Screen the flagship'], ['hold', 'Hold fire and position'], ['withdraw', 'Withdraw'], ...foes.map(f => [`engage:${f.id}`, `Engage ${f.name}`])].map(([v, n]) => `<option value="${v}"${v === val ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></li>`;
     }).join('')}</ul><small class="sf-dim">Signals take about ${clock(1)} to be acted on.</small>` : (allies.length ? `<small class="sf-dim">Friendly ships fight under their own captains: ${esc(allies.map(a => a.name).join(', '))}.</small>` : '');
-    return `${fleet}
+    const crew = clsOf(ps).size > 1 ? `<small class="sf-dim">Your officers: helm ${rating(ps.officers.helm)}, gunnery ${rating(ps.officers.weapons)}, sensors ${rating(ps.officers.sensors)}, engineering ${rating(ps.officers.engineering)}.</small>` : '';
+    return `${crew}${fleet}
         <div class="sf-actions">
             ${btn('sc-demand', 'Demand their surrender', { icon: 'fa-bullhorn', disabled: off(ok) })}
             ${btn('sc-disengage', sc.disengage ? 'Breaking contact…' : 'Break contact', { icon: 'fa-person-running', cls: sc.disengage ? 'primary' : '', disabled: off(ok), title: 'You are clear once no enemy holds a track on you' })}
@@ -249,6 +260,7 @@ function postingHtml(st) {
     const arms = Object.entries(cls.mounts.reduce((m, x) => { m[x.id] = (m[x.id] ?? 0) + 1; return m; }, {})).map(([id, n]) => `${SC_WEAPONS[id].name}${n > 1 ? ` ×${n}` : ''}`).join(', ');
     return `<div class="sf-loc-main"><i class="fa-solid fa-id-badge"></i> ${esc(post.name)}</div><div class="sf-loc-sub">${esc(p.shipName)} · ${esc(cls.name)}</div>
         ${lvl >= 2 ? `<small class="sf-dim">${esc(SIZES[cls.size].name)}, about ${fmtInt(SIZES[cls.size].length)} m, crew ${fmtInt(cls.crew)}. Armament: ${esc(arms || 'none')}.</small>
+        ${cls.mech ? `<small class="sf-warn-line">Combat frame: worth about ${fmtInt(cls.price)} cr, needs Mech Piloting ${cls.minSkill} to handle properly, and can only be repaired in a dedicated mech bay.</small>` : ''}
         <small class="sf-dim">In battle you control: ${post.can.length ? esc(post.can.join(', ')) : 'nothing'}.</small>` : '<small class="sf-dim">You have no access to the ship\'s systems.</small>'}`;
 }
 
@@ -294,7 +306,7 @@ export function initShipCombatUi() {
     registerTab({ id: 'tactical', label: 'Tactical', icon: 'fa-satellite', order: 4, when: (st) => !!st.shipCombat || !!st.lastShipCombat, widgets: ['sctime', 'scplot', 'scstation', 'schelm', 'scweapons', 'scsensors', 'sceng', 'sccommand', 'sclog', 'scaar'] });
 
     const me = () => playerShip(SC());
-    const told = (delay, what) => { if (delay > 0) toast('info', `${what}: carried out in ${clock(delay)}.`); };
+    const told = (delay, what) => { if (delay > 0) toast('info', `${what}: carried out in about ${clock(delay)}.`); };
     registerActions({
         'sc-run'(el) {
             const n = Number(el.dataset.n) || 1;
@@ -345,9 +357,10 @@ export function initShipCombatUi() {
             act(() => { let d = 0; for (const w of list) d = order(ps, 'weapon', { n: w.n, on }); told(d, 'Fire order'); });
         },
         'sc-missiles'() { const ps = me(); act(() => told(order(ps, 'missiles', !ps.missiles), 'Fire order')); },
-        'sc-power'(el) { act(() => instant.power(me(), el.dataset.v)); },
-        'sc-overload'() { const ps = me(); act(() => { ps.overload = !ps.overload; }); },
-        'sc-warp'() { const ps = me(); act(() => instant.warp(ps, ps.warp === null)); },
+        'sc-power'(el) { act(() => told(order(me(), 'power', el.dataset.v), 'Power change')); },
+        'sc-overload'() { const ps = me(); act(() => told(order(ps, 'overload', !ps.overload), 'Overload')); },
+        'sc-warp'() { const ps = me(); act(() => told(order(ps, 'warp', ps.warp === null), 'Jump order')); },
+        'sc-repel'() { act(() => joinBoardingDefence()); },
         'sc-dc'(el) {
             const ps = me();
             if (!can('engineering', SC())) return;
@@ -356,13 +369,13 @@ export function initShipCombatUi() {
                 ps.dcManual = true;
                 const list = ps.dc.includes(id) ? ps.dc.filter(x => x !== id) : [...ps.dc, id];
                 if (list.length > dcTeams(ps)) list.shift();
-                instant.dc(ps, list);
+                told(order(ps, 'dc', list), 'Repair teams');
             });
         },
         'sc-dc-auto'() { const ps = me(); act(() => { ps.dcManual = !ps.dcManual; if (!ps.dcManual) autoDc(ps); }); },
-        'sc-radar'() { const ps = me(); act(() => instant.radar(ps, !ps.radar)); },
-        'sc-jam'() { const ps = me(); act(() => instant.jam(ps, !ps.jam)); },
-        'sc-decoy'() { act(() => { if (!instant.decoy(me())) throw new Error('No decoys ready'); }); },
+        'sc-radar'() { const ps = me(); act(() => told(order(ps, 'radar', !ps.radar), 'Sensor order')); },
+        'sc-jam'() { const ps = me(); act(() => told(order(ps, 'jam', !ps.jam), 'Sensor order')); },
+        'sc-decoy'() { act(() => told(order(me(), 'decoy', true), 'Decoys')); },
         'sc-demand'() { act(() => demandSurrender()); afterPulse(); },
         'sc-disengage'() { act(() => { const sc = SC(); sc.disengage = !sc.disengage; }); },
         'sc-refuse'() { act(() => { const sc = SC(); sc.log.push({ p: sc.pulse, text: `${me().name} refuses to surrender.`, kind: 'info', felt: true }); sc.hail = null; }); },

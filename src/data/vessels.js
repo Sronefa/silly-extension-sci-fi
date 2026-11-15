@@ -5,16 +5,17 @@ export const PULSE_SECONDS = 30;
 
 /**
  * Size classes. Everything that makes a capital ship feel vastly bigger than a fighter lives here:
- * how long the helm takes to answer, how fast it turns, how loud it is on sensors, how many
+ * the base time in seconds each station needs to carry out an order (before the officer's skill
+ * is counted), how fast it turns, how loud it is on sensors, how many
  * damage control teams it carries.
  */
 export const SIZES = {
-    1: { id: 1, name: 'Strike craft', length: 18, helmDelay: 0, fireDelay: 0, turn: 180, accel: 1, sig: 0.3, evasion: 45, dcTeams: 0, draw: 7 },
-    2: { id: 2, name: 'Corvette', length: 70, helmDelay: 0, fireDelay: 0, turn: 90, accel: 0.6, sig: 0.6, evasion: 24, dcTeams: 1, draw: 10 },
-    3: { id: 3, name: 'Frigate', length: 180, helmDelay: 1, fireDelay: 0, turn: 60, accel: 0.4, sig: 1, evasion: 14, dcTeams: 2, draw: 13 },
-    4: { id: 4, name: 'Destroyer', length: 340, helmDelay: 2, fireDelay: 1, turn: 40, accel: 0.3, sig: 1.3, evasion: 8, dcTeams: 3, draw: 16 },
-    5: { id: 5, name: 'Cruiser', length: 650, helmDelay: 4, fireDelay: 1, turn: 25, accel: 0.2, sig: 1.7, evasion: 4, dcTeams: 4, draw: 20 },
-    6: { id: 6, name: 'Capital ship', length: 1600, helmDelay: 8, fireDelay: 2, turn: 12, accel: 0.1, sig: 2.3, evasion: 0, dcTeams: 6, draw: 26 },
+    1: { id: 1, name: 'Strike craft', length: 18, delay: { helm: 0, weapons: 0, sensors: 0, engineering: 0 }, turn: 180, accel: 1, sig: 0.3, evasion: 45, dcTeams: 0, draw: 7 },
+    2: { id: 2, name: 'Corvette', length: 60, delay: { helm: 8, weapons: 10, sensors: 0, engineering: 8 }, turn: 90, accel: 0.6, sig: 0.6, evasion: 24, dcTeams: 1, draw: 10 },
+    3: { id: 3, name: 'Frigate', length: 120, delay: { helm: 30, weapons: 25, sensors: 5, engineering: 15 }, turn: 60, accel: 0.4, sig: 1, evasion: 14, dcTeams: 2, draw: 13 },
+    4: { id: 4, name: 'Destroyer', length: 200, delay: { helm: 60, weapons: 40, sensors: 8, engineering: 25 }, turn: 40, accel: 0.3, sig: 1.3, evasion: 8, dcTeams: 3, draw: 16 },
+    5: { id: 5, name: 'Cruiser', length: 320, delay: { helm: 120, weapons: 60, sensors: 12, engineering: 40 }, turn: 25, accel: 0.2, sig: 1.7, evasion: 4, dcTeams: 4, draw: 20 },
+    6: { id: 6, name: 'Capital ship', length: 500, delay: { helm: 240, weapons: 90, sensors: 15, engineering: 60 }, turn: 12, accel: 0.1, sig: 2.3, evasion: 0, dcTeams: 6, draw: 26 },
 };
 
 /**
@@ -33,6 +34,7 @@ export const SC_WEAPONS = {
     missile: { id: 'missile', name: 'Light Missile Rails', kind: 'missile', size: 1, range: 1400, dmg: 130, pen: 4, speed: 380, salvo: 2, ammo: 4, hp: 1 },
     asm: { id: 'asm', name: 'Anti-ship Missile Cell', kind: 'missile', size: 2, range: 2800, dmg: 480, pen: 7, speed: 300, salvo: 2, ammo: 8, hp: 1 },
     torpedo: { id: 'torpedo', name: 'Torpedo Tube', kind: 'missile', size: 1, range: 1800, dmg: 1700, pen: 11, speed: 170, salvo: 1, ammo: 2, hp: 2 },
+    pod: { id: 'pod', name: 'Boarding Pod', kind: 'pod', size: 2, range: 260, speed: 130, hp: 2, dmg: 0, pen: 0 },
     pd: { id: 'pd', name: 'Point Defence Turret', kind: 'pd', size: 1, range: 60, intercept: 0.45, shots: 2, heat: 1, dmg: 8, pen: 1, acc: 55, track: 25 },
     flak: { id: 'flak', name: 'Flak Battery', kind: 'pd', size: 3, range: 110, intercept: 0.5, shots: 4, heat: 2, dmg: 16, pen: 2, acc: 50, track: 20 },
     blade: { id: 'blade', name: 'Heat Blade', kind: 'beam', size: 1, range: 12, dmg: 260, shots: 1, pen: 9, acc: 80, track: 20, heat: 10, melee: true },
@@ -73,8 +75,8 @@ export const VESSELS = {
     // Strike craft and mechs
     kestrel: { id: 'kestrel', name: 'F-22 Kestrel', role: 'Interceptor', size: 1, hull: 90, armor: [2, 1, 1], shield: 60, speed: 240, sensors: 1500, crew: 1, heat: 60, rooms: SMALL_ROOMS, mounts: [...m('pulse', 'F', 2), ...m('missile', 'F')], decoys: 2, doctrine: 'strike', pods: true },
     harrier: { id: 'harrier', name: 'A-9 Harrow', role: 'Strike craft', size: 1, hull: 130, armor: [3, 2, 1], shield: 70, speed: 190, sensors: 1300, crew: 2, heat: 60, rooms: SMALL_ROOMS, mounts: [...m('autocannon', 'F'), ...m('torpedo', 'F')], decoys: 2, doctrine: 'strike', pods: true },
-    halberd: { id: 'halberd', name: 'MF-7 Halberd', role: 'Line combat frame', size: 1, mech: true, hull: 170, armor: [4, 3, 2], shield: 40, speed: 150, sensors: 1300, crew: 1, heat: 80, rooms: SMALL_ROOMS, mounts: [...m('pulse', 'T'), ...m('rail', 'F'), ...m('blade', 'T')], decoys: 1, doctrine: 'brawl', pods: true },
-    lynx: { id: 'lynx', name: 'LX-2 Lynx', role: 'Scout frame', size: 1, mech: true, hull: 110, armor: [2, 2, 1], shield: 30, speed: 200, sensors: 2000, crew: 1, heat: 70, rooms: SMALL_ROOMS, mounts: [...m('autocannon', 'T')], decoys: 2, jammer: true, doctrine: 'strike', pods: true },
+    halberd: { id: 'halberd', name: 'MF-7 Halberd', role: 'Line combat frame', size: 1, mech: true, agile: 1.5, minSkill: 5, price: 2400000, hull: 280, armor: [5, 4, 3], shield: 90, speed: 170, sensors: 1300, crew: 1, heat: 80, rooms: SMALL_ROOMS, mounts: [...m('pulse', 'T'), ...m('rail', 'F'), ...m('blade', 'T')], decoys: 1, doctrine: 'brawl', pods: true },
+    lynx: { id: 'lynx', name: 'LX-2 Lynx', role: 'Scout frame', size: 1, mech: true, agile: 1.7, minSkill: 5, price: 1700000, hull: 190, armor: [3, 3, 2], shield: 70, speed: 220, sensors: 2000, crew: 1, heat: 70, rooms: SMALL_ROOMS, mounts: [...m('autocannon', 'T')], decoys: 2, jammer: true, doctrine: 'strike', pods: true },
     drone: { id: 'drone', name: 'Combat Drone', role: 'Drone', size: 1, hull: 60, armor: [1, 1, 1], shield: 30, speed: 230, sensors: 1200, crew: 0, heat: 50, rooms: ['reactor', 'drives', 'sensors'], mounts: [...m('pulse', 'F')], doctrine: 'strike', machine: true },
     // Civilian and light hulls
     sparrow: { id: 'sparrow', name: 'Sparrow-class Courier', role: 'Courier', size: 2, hull: 260, armor: [2, 2, 1], shield: 120, speed: 150, sensors: 1400, crew: 2, heat: 80, rooms: SHIP_ROOMS, mounts: [...m('pulse', 'T')], decoys: 2, doctrine: 'civilian', pods: true, warp: true },
@@ -133,3 +135,23 @@ export const POWER_PRESETS = {
 };
 
 export const TRACK_NAMES = ['No contact', 'Unknown contact', 'Classified', 'Firing solution'];
+
+/**
+ * Sensor grade, 1 to 4. Civilian sets throw ghost contacts and misread what they see;
+ * military suites rarely do, and a capital ship's almost never.
+ */
+export function sensorGrade(cls) {
+    if (cls.grade) return cls.grade;
+    if (cls.size >= 5) return 4;
+    if (cls.doctrine === 'civilian') return cls.sensors >= 2000 ? 2 : 1;
+    if (cls.pirate) return 2;
+    return 3;
+}
+export const GRADE_NAMES = ['', 'civilian', 'commercial', 'military', 'fleet-grade'];
+
+/** Boarding pods carried. Pirates live off prizes; warships carry marines. Strike craft carry none. */
+export function boardingPods(cls) {
+    if (cls.size < 2 || cls.doctrine === 'civilian' || cls.machine || !cls.speed) return 0;
+    if (cls.pirate) return cls.size >= 3 ? 3 : 1;
+    return cls.size >= 3 ? cls.size - 2 : 0;
+}
