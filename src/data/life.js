@@ -23,6 +23,8 @@ export const JOBS = [
     { id: 'medic', at: 'clinic', name: "Medic's aide", skill: 'medicine', min: 2, pay: 340, desc: 'Clinic work: dressings, scans, cleaning up.' },
     { id: 'lab', at: 'works', name: 'Lab assistant', skill: 'science', min: 3, pay: 360, econ: ['hightech', 'refinery', 'agricultural'], desc: 'Assays and sample runs.' },
     { id: 'welder', at: 'yard', name: 'Yard welder', skill: 'engineering', min: 4, pay: 400, yard: true, desc: 'Hull work in a suit. Skilled, and paid like it.' },
+    { id: 'eva', at: 'docks', name: 'EVA cutter on the belt rigs', skill: 'athletics', min: 1, pay: 330, econ: ['mining', 'refinery'], eva: true, desc: 'Eight hours in a hard suit on the station\'s mining rigs, cutting rock by hand. It pays well because people die doing it.' },
+    { id: 'rigboss', at: 'docks', name: 'EVA rig foreman', skill: 'engineering', min: 4, pay: 480, econ: ['mining'], eva: true, desc: 'Running a cutting crew out on the rock. Your mistakes kill other people.' },
     { id: 'copilot', at: 'docks', name: 'Shuttle co-pilot', skill: 'pilot', min: 3, pay: 450, licence: 'basic', desc: 'Right-hand seat on the orbital runs.' },
 ];
 

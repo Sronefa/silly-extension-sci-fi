@@ -16,6 +16,8 @@ import { startCombat, parseEnemies } from '../systems/combat.js';
 import { registerCommand } from '../systems/sim.js';
 import { registerPromptSection } from '../core/ailink.js';
 import { blip } from './sfx.js';
+import { deckPlan } from '../data/decks.js';
+import { boardPrize } from '../systems/salvage.js';
 
 const can = (domain, sc = SC()) => !!sc && consoles(sc).includes(domain);
 const live = (sc = SC()) => { const ps = playerShip(sc); return !!ps && isActive(ps) && !sc.over; };
@@ -477,7 +479,12 @@ export function initShipCombatUi() {
         'sc-act'(el) { act(() => { const sc = SC(); sc.playerAct = sc.playerAct === el.dataset.a ? null : el.dataset.a; }); },
         'sc-abort'() { abortShipCombat(); addLog('Space battle aborted.', 'combat'); commit('shipcombat'); },
         'sc-dismiss'() { S().lastShipCombat = null; commit('shipcombat'); },
-        'sc-salvage'(el) { act(() => { const cr = salvagePrize(el.dataset.id); if (cr) toast('success', `Salvage worth ${fmtInt(cr)} cr.`); }); },
+        'sc-salvage'(el) {
+            const p = S().lastShipCombat?.prizes.find(x => x.id === el.dataset.id);
+            // Anything with an inside is explored compartment by compartment; strike craft are stripped from outside.
+            if (p && deckPlan(VESSELS[p.cls])) { act(() => { toast('success', boardPrize(p.id)); openHud('wreck'); }); return; }
+            act(() => { const cr = salvagePrize(el.dataset.id); if (cr) toast('success', `Salvage worth ${fmtInt(cr)} cr.`); });
+        },
         'sc-board'(el) {
             const st = S();
             const p = st.lastShipCombat?.prizes.find(x => x.id === el.dataset.id);
@@ -526,9 +533,8 @@ export function initShipCombatUi() {
             const post = POSTS[p.role];
             out.push(`${st.captain.name} serves as ${post.name.toLowerCase()} aboard ${p.shipName} (${VESSELS[p.classId].name})${post.can.includes('command') ? ' and is in command' : `; they are not in command and ${post.can.length ? `only work the ${post.can.join(' and ')} station` : 'have no access to the bridge or the ship\'s systems'}`}.`);
         }
-        if (st.shipCombat) out.push('A SPACE BATTLE IS IN PROGRESS and is being resolved by the game engine. Do not narrate its course or outcome yet; keep any reply to a single tense beat.');
         if (st.stranded) out.push(`${st.ship?.name ?? 'The ship'} is STRANDED in deep space after a blind emergency jump: no lane, drive burned out.`);
-        return out.join('\n');
+        return { state: out.join('\n'), now: st.shipCombat ? 'A SPACE BATTLE IS IN PROGRESS and the game is resolving it. Do not narrate its course or outcome yet; keep any reply to a single tense beat.' : '' };
     });
 
     let was = false;

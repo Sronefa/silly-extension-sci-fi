@@ -281,7 +281,25 @@ export function quoteSell(st, key, goodId, qty) {
     if (!q.traded) why = 'no buyer for this here';
     else if (have < qty) why = `you hold ${have} t`;
     else if (q.qty < qty) why = `the warehouse will only take ${q.qty} t more`;
-    return { ...q, ok: !why && qty > 0, why, have };
+    // Mined ore is graded: the market price is for run-of-mine ore at half purity.
+    const grade = gradeFactor(st, goodId, Math.min(qty, have));
+    if (grade !== 1) { q.total = Math.floor(q.total * grade); q.avg *= grade; }
+    return { ...q, ok: !why && qty > 0, why, have, grade };
+}
+
+/** Price factor for graded ore: the market quotes ore of half purity. */
+export const purityFactor = (p) => (p ? Math.min(2, Math.max(0.1, p / 0.5)) : 1);
+/** Stacks of a good in the order they are sold: graded ore best first. */
+const sellOrder = (st, goodId) => st.cargo.filter(c => c.comId === goodId).sort((a, b) => (b.purity ?? 0) - (a.purity ?? 0));
+function gradeFactor(st, goodId, qty) {
+    let left = qty, sum = 0;
+    for (const c of sellOrder(st, goodId)) {
+        const take = Math.min(left, c.qty);
+        sum += take * purityFactor(c.purity);
+        left -= take;
+        if (!left) break;
+    }
+    return qty > 0 ? sum / (qty - left || 1) : 1;
 }
 
 function nudge(st, key, goodId, amount) {
@@ -300,7 +318,7 @@ export function buyGood(goodId, qty) {
     if (!q.ok) throw new Error(q.why || 'nothing to buy');
     const good = goodById(goodId);
     st.captain.credits -= q.total;
-    let stack = st.cargo.find(c => c.comId === goodId);
+    let stack = st.cargo.find(c => c.comId === goodId && !c.purity);
     if (!stack) { stack = { id: uid('it'), name: good.name, qty: 0, comId: goodId, paid: 0 }; st.cargo.push(stack); }
     stack.paid = Math.round(((stack.paid || 0) * stack.qty + q.total) / (stack.qty + qty));
     stack.qty += qty;
@@ -320,7 +338,7 @@ export function sellGood(goodId, qty) {
     if (!q.ok) throw new Error(q.why || 'nothing to sell');
     const good = goodById(goodId);
     let left = qty, cost = 0;
-    for (const c of st.cargo.filter(x => x.comId === goodId)) {
+    for (const c of sellOrder(st, goodId)) {
         const take = Math.min(left, c.qty);
         c.qty -= take; left -= take; cost += take * (c.paid || 0);
         if (!left) break;

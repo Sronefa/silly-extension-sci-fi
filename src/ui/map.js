@@ -9,6 +9,7 @@ import { fuelMult } from '../systems/services.js';
 import { isDown } from '../systems/body.js';
 import { SECTOR_W, SECTOR_H, findRoute, factionById, SECURITY_LABELS, systemDistance } from '../systems/galaxy.js';
 import { blip } from './sfx.js';
+import { flyTo } from '../systems/sites.js';
 
 let view = null;      // current viewBox { x, y, w, h }
 let selected = null;  // selected system id
@@ -256,12 +257,8 @@ export function initMap() {
         'map-clear'() { S().route = []; commit('route'); },
         'map-jump'() { doJump(); },
         'map-dock'(el) {
-            const st = S();
-            const sys = galaxy().systems[st.loc.system];
-            st.loc.station = Number(el.dataset.idx);
-            st.loc.docked = true;
-            st.loc.place = '';
-            addLog(`Docked at ${sys.stations[st.loc.station].name}.`, 'nav');
+            // Getting to another station takes a flight (or the ferry), not a jump cut.
+            try { toast('success', flyTo(`st:${el.dataset.idx}`)); } catch (e) { toast('warning', e.message); }
             commit('dock');
         },
         async 'map-note'() {

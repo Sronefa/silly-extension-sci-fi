@@ -73,6 +73,7 @@ const kinds = {};
 /**
  * def.finish(st, a): the time has been put in. def.stop(st, a, why): cut short ('quit' or
  * 'left'). def.miss(st, a): never turned up. def.half(st, a): called once near the middle.
+ * def.tick(st, a, mins): called as time is put in (survey sweeps, mining).
  */
 export function registerActivity(kind, def) { kinds[kind] = def; }
 
@@ -88,6 +89,10 @@ export function book(st, a) {
 export function present(st, a = st.activity) {
     if (!a) return false;
     if (a.custody) return !!st.custody;
+    // Work out in space: the ship has to be in the system, out of dock, and at the site if there is one.
+    // Work aboard a wreck happens in one compartment of it.
+    if (a.wreck && (st.salvage?.key !== a.wreck || st.salvage.at !== a.room)) return false;
+    if (a.space) return !st.transit && !st.cruise && !st.loc.docked && st.loc.system === a.sys && (!a.site || st.loc.site === a.site);
     const p = port(st);
     return !!p && p.key === a.key && (!a.area || areaOf(st) === a.area);
 }
@@ -134,6 +139,8 @@ export function activityTick(st, mins) {
     if (present(st, a)) {
         const before = a.done;
         a.done = Math.min(a.need, a.done + mins);
+        try { kinds[a.kind]?.tick?.(st, a, a.done - before); } catch (e) { console.error('[Ship-OS] activity tick failed', e); }
+        if (st.activity !== a) return;
         if (before < a.need / 2 && a.done >= a.need / 2 && a.done < a.need) { dropEvent(st, a); kinds[a.kind]?.half?.(st, a); a.ev = st.pendingEvent; }
         if (a.done >= a.need) {
             st.activity = null;
@@ -154,19 +161,20 @@ export function activityTick(st, mins) {
 
 /** What the storyteller is told about the character's whereabouts and commitments. */
 export function activityPrompt(st) {
-    const L = [];
+    const out = { rules: '', state: '', now: '' };
     const p = port(st);
     const a = st.activity;
     if (p && !st.custody) {
         const here = areaOf(st);
-        L.push(`ABOARD ${p.station.name}: ${st.captain.name} is at the ${areaName(st, here).toLowerCase()}. Areas (id: minutes away): ${areasHere(st).filter(x => x.id !== here).map(x => `${x.name} (${x.id}: ${walkTime(st, here, x.id)} min)`).join(', ')}. Nobody teleports: when the character goes to another area, narrate the way there and add the command: area <id>. The game adds the travel time itself. Use area, not location, for places inside this station.`);
+        out.state = `${st.captain.name} is at the ${areaName(st, here).toLowerCase()} of ${p.station.name}. Other areas (id: minutes on foot): ${areasHere(st).filter(x => x.id !== here).map(x => `${x.name} (${x.id}: ${walkTime(st, here, x.id)} min)`).join(', ')}.`;
+        out.rules = '<places>\nNobody teleports. When the character goes to another area, narrate the way there and add the command: area <id>. The game adds the walking time itself. Use area, not location, for places inside the station.\n</places>';
     }
     if (a && !a.on) {
         const where = a.area ? `at the ${areaName(st, a.area).toLowerCase()}` : 'there';
-        L.push(`BOOKED: ${a.name}, ${fmtDuration(a.need)} long. ${st.captain.name} must be ${where} and start within ${fmtDuration(Math.max(0, a.by - st.minutes))} or lose it. It has NOT started. They still have to get there${present(st, a) ? ' (they are in the right place now)' : ''}; the player starts it from the game panel. Do not narrate the work itself yet.`);
+        out.now = `BOOKED, NOT STARTED: ${a.name}, ${fmtDuration(a.need)} long. ${st.captain.name} must be ${where} and start within ${fmtDuration(Math.max(0, a.by - st.minutes))} or lose it${present(st, a) ? ' (they are in the right place now)' : '; they still have to get there'}. The player starts it from the game panel. Do not narrate the work itself yet.`;
     }
     if (a?.on) {
-        L.push(`IN PROGRESS: ${a.name}. ${fmtDuration(a.done)} done, ${fmtDuration(a.need - a.done)} still to go. This is lived, never skipped: play it as scenes (the task in hand, the people around, small troubles). Advance the clock only by what a reply actually covers. Longer stretches of it pass only when the player asks for them. Do not jump to the end, and do not pay, pass, fail or reward anything: the game resolves it when the time has really been put in.${a.note ? ` ${a.note}` : ''}${a.area ? ` Leaving the ${areaName(st, a.area).toLowerCase()} for long means walking out on it.` : ''}`);
+        out.now = `IN PROGRESS: ${a.name}, ${fmtDuration(a.done)} done, ${fmtDuration(a.need - a.done)} to go. Play it as scenes (the task in hand, the people around, small troubles). Do not jump to the end, and do not pay, pass, fail or reward anything: the game resolves it when the time has really been put in.${a.note ? ` ${a.note}` : ''}${a.area ? ` Leaving the ${areaName(st, a.area).toLowerCase()} for long means walking out on it.` : ''}`;
     }
-    return L.join('\n');
+    return out;
 }

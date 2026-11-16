@@ -13,6 +13,7 @@ import { skillOf, skillCheck, gainXp } from './character.js';
 import { shipWorth, financeShip, totalDebt } from './finance.js';
 import { advanceTime } from './sim.js';
 import { book, registerActivity, areaOf, areaName, areasHere, hasSchool } from './activity.js';
+import { damagePart } from './body.js';
 
 export { hasSchool };
 
@@ -85,6 +86,13 @@ registerActivity('work', {
         st.pendingEvent ??= `${st.captain.name} has clocked in for the shift as ${a.job.toLowerCase()}. Eight hours of it lie ahead. Open the shift: the foreman or whoever is in charge, the task, the people working alongside.`;
     },
     half(st, a) {
+        // Out on the rock in a suit, the incident can be the suit.
+        if (JOBS.find(j => j.id === a.id)?.eva && Math.random() < 0.15) {
+            const r = skillCheck(st.captain, 'athletics', 12);
+            if (!r.success) damagePart(st.captain, ['larm', 'rarm', 'lleg', 'rleg'][Math.floor(Math.random() * 4)], 20 + Math.floor(Math.random() * 30));
+            st.pendingEvent ??= `Halfway through the EVA shift: ${r.success ? 'a suit seal warning, a tether snaps, a rock shifts. They keep their head and get through it' : 'a rock shifts and pins a limb, and the suit is hurt too. They are injured out there'} (${r.total} against 12). Play it out.`;
+            return;
+        }
         const what = SHIFT_INCIDENTS[Math.floor(Math.random() * SHIFT_INCIDENTS.length)];
         st.pendingEvent ??= `Halfway through the shift as ${a.job.toLowerCase()}: ${what}. Play it out.`;
     },

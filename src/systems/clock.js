@@ -92,6 +92,7 @@ export function suggestions(st = S()) {
     if (a?.on && a.need > a.done) out.push({ label: `Until it is done (${fmtDuration(a.need - a.done)})`, mins: a.need - a.done });
     if (a && !a.on && a.by - margin(st, a) > st.minutes) { const m = a.by - margin(st, a) - st.minutes; out.push({ label: `Until it is time to go (${fmtDuration(m)})`, mins: m }); }
     if (st?.transit) { const left = st.transit.end - st.minutes; if (left > 0 && left <= MAX_ASK) out.push({ label: `Until arrival (${fmtDuration(left)})`, mins: left }); }
+    if (st?.cruise) { const left = st.cruise.end - st.minutes; if (left > 0 && left <= MAX_ASK) out.push({ label: `Until you get there (${fmtDuration(left)})`, mins: left }); }
     return out;
 }
 
@@ -112,6 +113,7 @@ export function passTime(asked, { what = '' } = {}) {
     const ev0 = st.pendingEvent;
     const cust0 = st.custody?.type ?? null;
     const transit0 = !!st.transit;
+    const cruise0 = !!st.cruise;
     let left = Math.round(asked);
     while (left > 0) {
         const a = st.activity;
@@ -127,6 +129,7 @@ export function passTime(asked, { what = '' } = {}) {
         if (st.pendingEvent && st.pendingEvent !== ev0) { why = 'something came up'; break; }
         if ((st.custody?.type ?? null) !== cust0) { why = 'everything changed'; break; }
         if (transit0 && !st.transit) { why = 'the journey is over'; break; }
+        if (cruise0 && !st.cruise) { why = 'you have arrived'; break; }
         if (st.combat || st.shipCombat) { why = 'a fight broke out'; break; }
         if (isBleeding(st.captain)) { why = 'you are bleeding'; break; }
         const low = lowNeed(st);

@@ -167,12 +167,16 @@ function say(u, kind, detail = '') {
 
 // ---------- Setup ----------
 
-export function startCombat({ scene = 'Unknown ground', groups = [], surprise = null } = {}) {
+/**
+ * Starts a fight. layout, when given, is a ground of its own ({ zones, links }, as in LAYOUTS),
+ * such as the compartments of a wreck around the one being entered.
+ */
+export function startCombat({ scene = 'Unknown ground', groups = [], surprise = null, layout: custom = null } = {}) {
     const st = S();
     if (!st || st.dead) throw new Error('no living character');
     if (st.combat) throw new Error('a fight is already in progress');
     if (!groups.length) throw new Error('no enemies given');
-    const layout = pickLayout(scene);
+    const layout = custom ?? pickLayout(scene);
     const zones = layout.zones.map((z, i) => ({ id: i, ...z }));
     const entry = zones.find(z => z.entry) ?? zones[0];
     const far = zones.filter(z => z.far);
@@ -206,7 +210,7 @@ export function startCombat({ scene = 'Unknown ground', groups = [], surprise = 
     }
     const order = [...units].sort((a, b) => b.init - a.init).map(u => u.id);
     st.combat = {
-        scene, layout: Object.keys(LAYOUTS).find(k => LAYOUTS[k] === layout), zones, links: layout.links.map(l => [...l]),
+        scene, layout: custom ? 'custom' : Object.keys(LAYOUTS).find(k => LAYOUTS[k] === layout), zones, links: layout.links.map(l => [...l]),
         units, order, turn: -1, round: 1, log: [], over: null, startMinutes: st.minutes,
         stats: { shots: 0, hits: 0, kills: [], used: [], taken: 0 }, prevAlert: st.alert,
     };

@@ -41,7 +41,9 @@ const SYSTEMS = [
     { id: 'navcomp', name: 'Navigation Computer', slot: 'bay', size: 2, legal: 'open', price: 50000, fx: { spool: -1 }, desc: 'Works jump solutions faster: the drive spools thirty seconds sooner.' },
     { id: 'prow', name: 'Reinforced Prow', slot: 'bay', size: 3, legal: 'licensed', price: 300000, fx: { ram: true, bow: 2 }, desc: 'A ram bow. Turns a collision into a weapon.' },
     { id: 'hidden', name: 'Shielded Compartment', slot: 'bay', size: 1, legal: 'restricted', price: 25000, fx: { hidden: 5 }, desc: 'Five tonnes of hold that a customs scan does not find.' },
-    { id: 'orerig', name: 'Ore Processing Rig', slot: 'bay', size: 3, legal: 'open', price: 80000, fx: { mining: true }, desc: 'Crushers and a smelter. Turns rock into something worth hauling.' },
+    { id: 'orerig', name: 'Ore Processing Rig', slot: 'bay', size: 3, legal: 'open', price: 80000, fx: { mining: true, refine: true }, desc: 'Crushers and a smelter aboard. Ore cut with it running comes out at twice the purity, and sells for twice as much.' },
+    { id: 'orescanner', name: 'Ore Scanner', slot: 'utility', size: 1, legal: 'open', price: 15000, fx: { oreScan: 3 }, desc: 'Spectrometers and a ground-penetrating radar. Reads what a rock is made of, and how much of it, from three kilometres.' },
+    { id: 'salvagerig', name: 'Salvage Rig', slot: 'bay', size: 1, legal: 'open', price: 20000, fx: { salvage: true }, desc: 'Cutting torches, grapples, a crane and the frames to haul big parts out of a wreck.' },
     { id: 'overdrive', name: 'Overtuned Drives', slot: 'bay', size: 2, legal: 'licensed', price: 220000, fx: { speed: 1.12, heat: 0.9 }, desc: 'Faster, hotter, and out of warranty.' },
 ];
 
@@ -66,13 +68,16 @@ export function hullSlots(cls) {
     }
     if (cls.size < 2) return slots;
     const util = cls.size - 1;
-    for (let i = 0; i < util; i++) push('utility', Math.min(3, cls.size), { stock: i === 0 && cls.jammer ? 'jammer' : null });
+    // Mining hulls leave the yard with an ore scanner in the first free utility slot.
+    const miner = cls.mounts.some(mt => mt.id === 'mininglaser') && cls.family === 'industrial';
+    for (let i = 0; i < util; i++) push('utility', Math.min(3, cls.size), { stock: i === 0 && cls.jammer ? 'jammer' : (i === (cls.jammer ? 1 : 0) && miner ? 'orescanner' : null) });
     const bays = cls.family === 'industrial' ? cls.size + 1 : cls.family === 'civilian' ? cls.size : cls.size - 1;
     const stock = [];
     if (cls.medbay || (cls.family === 'military' && cls.size >= 3 && !cls.pirate)) stock.push('medbay');
     if (cls.mechBay) stock.push('mechbay');
     if (cls.dcBonus) stock.push('workshop');
     if (cls.ram) stock.push('prow');
+    if (/salvage/i.test(cls.role)) stock.push('salvagerig');
     for (let i = 0; i < Math.max(bays, stock.length); i++) {
         const st = stock[i] ?? null;
         push('bay', Math.max(Math.min(4, cls.size), st ? MODULES[st].size : 0), { stock: st });
