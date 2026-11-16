@@ -4,6 +4,7 @@ import { initShipCombatUi } from './src/ui/shipcombat.js';
 import { initRefitUi } from './src/ui/refit.js';
 import { initDecksUi } from './src/ui/decks.js';
 import { initMarketUi } from './src/ui/market.js';
+import { initLifeUi } from './src/ui/life.js';
 import { settings, on } from './src/core/st.js';
 import { S, migrate, notify } from './src/core/state.js';
 import { initAiLink, refreshPrompt } from './src/core/ailink.js';
@@ -35,6 +36,7 @@ function start() {
         initRefitUi();
         initDecksUi();
         initMarketUi();
+        initLifeUi();
         initAgentsUi();
         initHud();
         initSettings();

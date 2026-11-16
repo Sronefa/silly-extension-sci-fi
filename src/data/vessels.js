@@ -206,9 +206,9 @@ const META = {
     halberd: ['strike', 'hegemony', 'restricted', 2400000, 'The Hegemony line frame. Each one costs more than the corvette that carries it.'],
     lynx: ['strike', 'accord', 'restricted', 1700000, 'A scout frame with a jammer and the best eyes of anything its size.'],
     drone: ['strike', 'combine', 'restricted', 60000, 'An expendable Combine combat drone. A poor fighter, but nobody writes a letter home.'],
-    sparrow: ['civilian', null, 'open', 90000, 'A two-seat courier. Small hold, long legs, quick enough to stay out of trouble.'],
-    mule: ['civilian', null, 'open', 140000, 'The light freighter half the frontier was built with.'],
-    pathfinder: ['civilian', null, 'open', 190000, 'A survey ship with a sensor suite worth more than the rest of her.'],
+    sparrow: ['civilian', null, 'open', 60000, 'A two-seat courier. Small hold, long legs, quick enough to stay out of trouble.'],
+    mule: ['civilian', null, 'open', 100000, 'The light freighter half the frontier was built with.'],
+    pathfinder: ['civilian', null, 'open', 140000, 'A survey ship with a sensor suite worth more than the rest of her.'],
     atlas: ['industrial', null, 'open', 1300000, 'Two hundred metres of hold with a drive bolted on.'],
     liner: ['civilian', null, 'licensed', 900000, 'A passenger transport for the regular lanes.'],
     raider: ['military', 'ashen', 'restricted', 700000, 'A stripped corvette with a boarding lock and a grapple.'],
@@ -235,7 +235,7 @@ VESSELS.dreadnought.role = 'Battleship';
 const add = (...a) => { const v = build(...a); VESSELS[v.id] = v; };
 
 // Strike craft
-add('shuttle', 'Type-4 Shuttle', 'Shuttle', 1, 'civilian', null, 'open', { mult: { speed: 0.6, hull: 1.2, price: 1.2 }, set: { crew: 2, doctrine: 'civilian', decoys: 0 }, desc: 'A ship-to-shore shuttle. Unarmed.' });
+add('shuttle', 'Type-4 Shuttle', 'Shuttle', 1, 'civilian', null, 'open', { mult: { speed: 0.6, hull: 1.2, price: 1.2 }, set: { crew: 2, doctrine: 'civilian', decoys: 0, price: 35000 }, desc: 'A ship-to-shore shuttle with a small jump drive. Unarmed, cramped, and the first ship most spacers ever own.' });
 add('zealot', 'HF-3 Zealot', 'Heavy fighter', 1, 'strike', 'hegemony', 'restricted', { mult: { speed: 0.85, hull: 1.4 }, mounts: [...m('autocannon', 'F', 2), ...m('missile', 'F')], set: { doctrine: 'strike' }, desc: 'A Hegemony heavy fighter: slow for its kind and very hard to kill.' });
 add('vector', 'CV-9 Vector', 'Multirole fighter', 1, 'strike', 'combine', 'restricted', { mounts: [...m('pulse', 'F', 2), ...m('missile', 'F')], set: { doctrine: 'strike', jammer: true }, desc: 'A Combine multirole fighter with a jammer in the nose.' });
 add('mustang', 'Mustang Militia Fighter', 'Militia fighter', 1, 'strike', 'compact', 'licensed', { mult: { speed: 1.05 }, mounts: [...m('autocannon', 'F'), ...m('missile', 'F')], set: { doctrine: 'strike' }, desc: 'A racing frame with guns bolted on. The Compact builds them in barns.' });

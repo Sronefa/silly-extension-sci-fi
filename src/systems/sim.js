@@ -197,6 +197,8 @@ function removeStack(list, name, qty) {
 const COMMANDS = {
     credits(st, [v]) {
         const d = aiMode ? parseDelta(v) : null;
+        // Wages come from the game when the hours have been worked, and nobody in custody is handed money.
+        if (d && (d.set ? d.v - st.captain.credits : d.v) > 0 && (st.activity?.kind === 'work' || st.custody)) throw new Error(st.custody ? 'a prisoner or a slave is not handed money by the story' : 'wages are paid by the game when the shift is done');
         if (d && (d.set ? d.v - st.captain.credits : d.v) > AI_CREDIT_CAP) {
             st.captain.credits += AI_CREDIT_CAP;
             return `Credits +${AI_CREDIT_CAP} (capped: larger sums are paid through contracts and trade)`;
@@ -298,6 +300,8 @@ const COMMANDS = {
     craving(st, [v]) { return `Craving ${applyDelta(st.captain, 'craving', v, 0, 100)}`; },
     debt(st, [v]) {
         const d = aiMode ? parseDelta(v) : null;
+        // Wages come from the game when the hours have been worked, and nobody in custody is handed money.
+        if (d && (d.set ? d.v - st.captain.credits : d.v) > 0 && (st.activity?.kind === 'work' || st.custody)) throw new Error(st.custody ? 'a prisoner or a slave is not handed money by the story' : 'wages are paid by the game when the shift is done');
         if (d && (d.set ? d.v < st.captain.debt : d.v < 0)) throw new Error('debt is only cleared by paying it');
         return `Debt ${applyDelta(st.captain, 'debt', v, 0, 1e12)}`;
     },
@@ -362,8 +366,11 @@ const COMMANDS = {
     },
     radiation(st, [v]) { return `Radiation ${applyDelta(st.captain, 'radiation', v, 0, 1000)}`; },
     time(st, [v]) {
-        const mins = parseDuration(v);
+        let mins = parseDuration(v);
         if (!Number.isFinite(mins)) throw new Error(`"${v}" is not a duration`);
+        // The storyteller cannot wind the clock back, and cannot jump over a shift, a lesson
+        // or a day's forced labour: those are lived two hours at a time at most.
+        if (aiMode) mins = clamp(mins, 0, st.activity?.on ? 120 : 24 * 60);
         advanceTime(mins);
         return `Time ${mins >= 0 ? '+' : ''}${Math.round(mins / 6) / 10}h`;
     },

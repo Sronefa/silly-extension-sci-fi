@@ -2,7 +2,7 @@
 // ship that results when the fit is applied to the hull class.
 import { S, addLog } from '../core/state.js';
 import { VESSELS, LEGAL } from '../data/vessels.js';
-import { SHIP_CLASSES } from '../data/catalog.js';
+import { ownClass } from '../data/hulls.js';
 import { MODULES, hullSlots, fits, refitRule } from '../data/modules.js';
 import { advanceTime } from './sim.js';
 
@@ -49,7 +49,7 @@ export function effectiveClass(st = S()) {
 
 /** Hold, tanks and the like follow the fit on the ship the player flies between battles. */
 function syncShip(st) {
-    const base = SHIP_CLASSES[st.ship.classId];
+    const base = ownClass(st.ship.classId);
     if (!base) return;
     let cargo = base.cargo, fuel = base.fuel;
     for (const slot of slotsOf(st)) {

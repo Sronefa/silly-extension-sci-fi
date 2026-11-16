@@ -238,7 +238,7 @@ export function makeNpcSheet(name, role = 'Crew') {
         attrs, skills, xp, traits: [], flaws: [], cyber: [],
         stress: 10, morale: 70, injuries: [],
         weapon: career?.weapon ?? 'pistol', armor: career?.armor ?? 'none',
-        wage: 60, notes: '',
+        wage: 110, notes: '',
     };
     refreshDerived(sheet);
     return sheet;

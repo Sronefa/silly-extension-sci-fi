@@ -5,6 +5,7 @@ import { SHIP_CLASSES, SHIP_SYSTEMS, NEEDS } from '../data/catalog.js';
 import { ATTRIBUTES, SKILL_IDS, CRAFT_CLASSES } from '../data/chargen.js';
 import { refreshDerived } from '../systems/character.js';
 import { getGalaxy } from '../systems/galaxy.js';
+import { ownClass } from '../data/hulls.js';
 
 const KEY = 'scifi_os';
 const HIST_KEY = 'scifi_os_hist';
@@ -42,7 +43,7 @@ export function notify(reason = '') {
 }
 
 export function buildShip(classId, name) {
-    const cls = SHIP_CLASSES[classId] ?? SHIP_CLASSES.mule;
+    const cls = ownClass(classId) ?? SHIP_CLASSES.mule;
     const systems = {};
     for (const s of SHIP_SYSTEMS) systems[s.id] = 100;
     return {
@@ -290,7 +291,7 @@ export function cargoCap(st = S()) {
 }
 
 export function shipClass(st = S()) {
-    return st?.ship ? (SHIP_CLASSES[st.ship.classId] ?? SHIP_CLASSES.mule) : null;
+    return st?.ship ? (ownClass(st.ship.classId) ?? SHIP_CLASSES.mule) : null;
 }
 
 /** Formats campaign minutes as an in-universe date, e.g. "2387.142 · 09:00". */
