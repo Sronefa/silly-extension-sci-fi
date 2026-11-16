@@ -73,6 +73,7 @@ const kinds = {};
 /**
  * def.finish(st, a): the time has been put in. def.stop(st, a, why): cut short ('quit' or
  * 'left'). def.miss(st, a): never turned up. def.half(st, a): called once near the middle.
+ * def.tick(st, a, mins): called as time is put in (survey sweeps, mining).
  */
 export function registerActivity(kind, def) { kinds[kind] = def; }
 
@@ -88,6 +89,8 @@ export function book(st, a) {
 export function present(st, a = st.activity) {
     if (!a) return false;
     if (a.custody) return !!st.custody;
+    // Work out in space: the ship has to be in the system, out of dock, and at the site if there is one.
+    if (a.space) return !st.transit && !st.cruise && !st.loc.docked && st.loc.system === a.sys && (!a.site || st.loc.site === a.site);
     const p = port(st);
     return !!p && p.key === a.key && (!a.area || areaOf(st) === a.area);
 }
@@ -134,6 +137,8 @@ export function activityTick(st, mins) {
     if (present(st, a)) {
         const before = a.done;
         a.done = Math.min(a.need, a.done + mins);
+        try { kinds[a.kind]?.tick?.(st, a, a.done - before); } catch (e) { console.error('[Ship-OS] activity tick failed', e); }
+        if (st.activity !== a) return;
         if (before < a.need / 2 && a.done >= a.need / 2 && a.done < a.need) { dropEvent(st, a); kinds[a.kind]?.half?.(st, a); a.ev = st.pendingEvent; }
         if (a.done >= a.need) {
             st.activity = null;
