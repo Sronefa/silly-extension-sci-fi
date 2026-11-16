@@ -526,9 +526,8 @@ export function initShipCombatUi() {
             const post = POSTS[p.role];
             out.push(`${st.captain.name} serves as ${post.name.toLowerCase()} aboard ${p.shipName} (${VESSELS[p.classId].name})${post.can.includes('command') ? ' and is in command' : `; they are not in command and ${post.can.length ? `only work the ${post.can.join(' and ')} station` : 'have no access to the bridge or the ship\'s systems'}`}.`);
         }
-        if (st.shipCombat) out.push('A SPACE BATTLE IS IN PROGRESS and is being resolved by the game engine. Do not narrate its course or outcome yet; keep any reply to a single tense beat.');
         if (st.stranded) out.push(`${st.ship?.name ?? 'The ship'} is STRANDED in deep space after a blind emergency jump: no lane, drive burned out.`);
-        return out.join('\n');
+        return { state: out.join('\n'), now: st.shipCombat ? 'A SPACE BATTLE IS IN PROGRESS and the game is resolving it. Do not narrate its course or outcome yet; keep any reply to a single tense beat.' : '' };
     });
 
     let was = false;

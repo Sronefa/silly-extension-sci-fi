@@ -75,7 +75,12 @@ export function initSettings() {
             ${check('inject', 'Send character and ship telemetry to the AI')}
             ${check('injectNearby', 'Include local stations and jump lanes')}
             ${check('aiCommands', 'Let the AI update the state with hidden &lt;sf&gt; tags')}
-            <label>Injection depth <input type="number" class="text_pole" min="0" max="20" data-sfs="injectDepth"></label>
+            <label title="Automatic: the game places its three blocks itself. Preset macros: nothing is added automatically; put {{shipos_rules}}, {{shipos_state}} and {{shipos_now}} (or {{shipos}} for all three) where your preset wants them.">How the game reaches the AI <select class="text_pole" data-sfs="injectMode"><option value="auto">Automatic injection</option><option value="macros">Only through preset macros</option></select></label>
+            <label title="Some models and presets handle system messages inside the chat badly. Pick user if yours does.">Role of the injected blocks <select class="text_pole" data-sfs="injectRole"><option value="system">System</option><option value="user">User</option><option value="assistant">Assistant</option></select></label>
+            <label title="Rules change only when the situation does. After the main prompt they stay put and are cached; in the chat they sit closer to the reply.">Rules block goes <select class="text_pole" data-sfs="rulesAt"><option value="prompt">After the main prompt</option><option value="chat">In the chat, at a depth</option></select></label>
+            <label>Rules depth (in the chat) <input type="number" class="text_pole" min="0" max="50" data-sfs="rulesDepth"></label>
+            <label title="The state of the world. The short 'now' block always goes last, just before the reply.">State block depth <input type="number" class="text_pole" min="0" max="20" data-sfs="injectDepth"></label>
+            <small>Macros for presets: {{shipos_rules}}, {{shipos_state}}, {{shipos_now}}, {{shipos}}. They work in either mode; use them in the preset only with "Only through preset macros", or the blocks are sent twice.</small>
             <h4>Second model and agents</h4>
             <small>Background jobs can use a different, faster model than the one that writes the story. Save it as a Connection Profile in SillyTavern, then pick it here.</small>
             <label>Background jobs use <select class="text_pole" data-sfs="sideSource"><option value="main">The same model as the chat</option><option value="profile">A connection profile</option></select></label>

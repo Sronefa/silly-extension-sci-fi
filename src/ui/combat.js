@@ -327,7 +327,7 @@ export function initCombatUi() {
     }, ['fight', 'battle', 'encounter']);
 
     registerPromptSection((st) => (st.combat
-        ? 'A FIGHT IS IN PROGRESS and is being resolved by the game engine. Do not narrate its course or outcome yet; keep any reply to a single tense beat.'
+        ? { now: 'A FIGHT IS IN PROGRESS and the game is resolving it. Do not narrate its course or outcome yet; keep any reply to a single tense beat.' }
         : ''));
 
     // Open the combat screen the moment a fight starts.

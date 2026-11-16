@@ -31,6 +31,10 @@ export const DEFAULT_SETTINGS = {
     // AI link
     inject: true,
     injectDepth: 1,
+    injectMode: 'auto',
+    injectRole: 'system',
+    rulesAt: 'prompt',
+    rulesDepth: 8,
     injectNearby: true,
     aiCommands: true,
     hideTags: true,

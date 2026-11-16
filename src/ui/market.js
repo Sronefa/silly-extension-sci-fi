@@ -283,9 +283,9 @@ function promptSection(st) {
     }
     const e = econ(st);
     if (e.owedWages) L.push(`The crew are owed ${fmtInt(e.owedWages)} cr in unpaid wages and know it.`);
-    L.push('ECONOMY RULES: the game owns every price and every transaction. The player buys and sells cargo, fuel, stores, ammunition, repairs and information in their own terminal, so never quote exact prices that differ from the ones above, never add or remove credits or cargo for a trade, and never grant more than small sums of money (large payments come from contracts). '
-        + 'You may roleplay vendors and brokers. If the character bargains with one, judge only how it went and add one command: haggle success, haggle fail, or haggle insult (when the character is rude or threatening). The game then sets the discount or the penalty in the shop menu.');
-    return L.join('\n');
+    const rules = 'MONEY AND TRADE: the game owns every price and every transaction. The player buys and sells cargo, fuel, stores, ammunition, repairs and information in their own terminal, so never quote exact prices that differ from the ones in <ship_os_state>, never add or remove credits or cargo for a trade, and never grant more than small sums of money (large payments come from contracts). '
+        + 'You may roleplay vendors and brokers. If the character bargains with one, judge only how it went and add one command: haggle success, haggle fail, or haggle insult (when the character is rude or threatening). The game then sets the discount or the penalty in the shop menu.';
+    return { rules, state: L.join('\n') };
 }
 
 export function initMarketUi() {
