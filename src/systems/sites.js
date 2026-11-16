@@ -349,7 +349,7 @@ export function sitesPrompt(st) {
     const L = [];
     if (st.cruise) L.push(`The ${st.ship?.name ?? 'ship'} is in flight to ${st.cruise.name}, arriving in ${fmtDuration(Math.max(0, st.cruise.end - st.minutes))}.`);
     const here = currentSite(st);
-    if (here) L.push(`The ${st.ship?.name ?? 'ship'} is holding at ${describeSite(st, here)}.`);
+    if (here && here.kind !== 'field') L.push(`The ${st.ship?.name ?? 'ship'} is holding at ${describeSite(st, here)}.`);
     const known = knownSites(st);
     if (known.length) L.push(`Known sites in this system: ${known.map(s => describeSite(st, s)).join('; ')}.`);
     return L.join('\n');

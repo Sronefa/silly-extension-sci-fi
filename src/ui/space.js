@@ -132,9 +132,9 @@ function plotSvg(st, here) {
     const reach = rockInReach(st);
     const dots = rocks.map(r => {
         const rad = 0.12 + r.size / 700;
-        const col = r.scanned ? (ORE_COLORS[r.ore] ?? '#aaa') : '#6b7280';
+        const col = r.scanned ? (ORE_COLORS[r.ore] ?? '#aaa') : '#1f2937';
         const spent = r.left <= 0;
-        return `<circle cx="${r.x}" cy="${r.y}" r="${rad.toFixed(2)}" fill="${spent ? 'none' : col}" stroke="${r.id === selRock ? '#fff' : spent ? '#555' : 'none'}" stroke-width="0.08" opacity="${spent ? 0.6 : 0.9}" data-sf="mn-rock" data-id="${esc(r.id)}" style="cursor:pointer"/>`;
+        return `<circle cx="${r.x}" cy="${r.y}" r="${rad.toFixed(2)}" fill="${spent ? 'none' : col}" stroke="${r.id === selRock ? '#fff' : spent ? '#555' : r.scanned ? 'none' : '#6b7280'}" stroke-width="0.08" opacity="${spent ? 0.6 : 0.9}" data-sf="mn-rock" data-id="${esc(r.id)}" style="cursor:pointer"/>`;
     }).join('');
     const f = st.field;
     const path = f?.move ? `<line x1="${here.x.toFixed(2)}" y1="${here.y.toFixed(2)}" x2="${f.move.x1}" y2="${f.move.y1}" stroke="#7dd3fc" stroke-width="0.06" stroke-dasharray="0.25 0.2"/>` : '';
@@ -143,8 +143,8 @@ function plotSvg(st, here) {
         <g stroke="#1e293b" stroke-width="0.04">${grid}</g>
         ${range ? `<circle cx="${here.x.toFixed(2)}" cy="${here.y.toFixed(2)}" r="${range}" fill="none" stroke="#22d3ee" stroke-width="0.05" stroke-dasharray="0.3 0.3" opacity="0.6" pointer-events="none"/>` : ''}
         ${path}${dots}
-        <g transform="translate(${here.x.toFixed(2)} ${here.y.toFixed(2)})" pointer-events="none"><polygon points="0,-0.35 0.25,0.25 -0.25,0.25" fill="${reach ? '#4ade80' : '#7dd3fc'}"/></g>
-        <text x="0" y="${PLOT_KM + 0.4}" font-size="0.45" fill="#64748b">5 km grid · tap open space to move, a rock to select it</text></svg>`;
+        <g transform="translate(${here.x.toFixed(2)} ${here.y.toFixed(2)})" pointer-events="none"><polygon points="0,-0.35 0.25,0.25 -0.25,0.25" fill="${reach ? '#4ade80' : '#7dd3fc'}"/></g></svg>
+        <small class="sf-dim">5 km grid. Tap open space to move there, or a rock to select it. Grey outlines are rocks the scanner has not read.</small>`;
 }
 
 function rockLine(st, here, r) {

@@ -29,7 +29,7 @@ const CONDITION = { working: 'working', damaged: 'damaged', scrap: 'scrap', dead
 
 // ---- The wreck ----
 
-const HAZARDS = {
+export const HAZARDS = {
     breach: { name: 'Torn hull', skill: 'athletics', dc: 11, text: 'jagged plating and open vacuum', hurt: 'a suit tear' },
     unstable: { name: 'Buckled frames', skill: 'athletics', dc: 12, text: 'frames that shift under any weight', hurt: 'a collapse' },
     wiring: { name: 'Live wiring', skill: 'electronics', dc: 11, text: 'cables still holding a charge from the batteries', hurt: 'an arc' },

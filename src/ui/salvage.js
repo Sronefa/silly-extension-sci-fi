@@ -9,7 +9,7 @@ import { MODULES } from '../data/modules.js';
 import { port, hasYard } from '../systems/services.js';
 import { quit } from '../systems/activity.js';
 import {
-    SUIT_AIR, PART_REPAIR, wreckOf, boardable, boardWreck, leaveWreck, moveRoom, searchRoom, takeLoot, lootName, lootNeeds, neighbours,
+    HAZARDS, SUIT_AIR, PART_REPAIR, wreckOf, boardable, boardWreck, leaveWreck, moveRoom, searchRoom, takeLoot, lootName, lootNeeds, neighbours,
     salvageTick, salvagePrompt, SALVAGE_RULE, salvagedParts, partValue, sellPart, stowPart, handInRecorder,
 } from '../systems/salvage.js';
 import { onTick, fmtDuration } from '../systems/sim.js';
@@ -66,7 +66,7 @@ function aboardHtml(st) {
     const cutting = st.activity?.kind === 'cut' && st.activity.on ? st.activity : null;
     return `${gauge('Suit air', sv.air, SUIT_AIR, { text: fmtDuration(sv.air), invert: false })}
         ${wreckSvg(st, w)}
-        <div class="sf-note"><b>${esc(r.name)}</b> · deck ${r.deck}<br><small>${esc(r.desc || '')}</small>${r.hazard ? `<br><small class="sf-warn-line">Hazard: ${esc(r.hazard)}</small>` : ''}</div>
+        <div class="sf-note"><b>${esc(r.name)}</b> · deck ${r.deck}<br><small>${esc(r.desc || '')}</small>${r.hazard ? `<br><small class="sf-warn-line">Hazard: ${esc(HAZARDS[r.hazard]?.name ?? r.hazard)}</small>` : ''}</div>
         ${st.combat ? '<div class="sf-note">There is fighting in here. Finish it on the Combat tab.</div>' : ''}
         ${cutting ? `<div class="sf-note"><b>${esc(cutting.name)}</b><br>${esc(fmtDuration(cutting.done))} done, ${esc(fmtDuration(cutting.need - cutting.done))} to go.
             <span class="sf-xp sf-act-bar"><span style="width:${Math.round(100 * cutting.done / cutting.need)}%"></span></span></div>
