@@ -96,7 +96,10 @@ body.sf-hud-open #sf-fab { opacity: 0.55; }
 .sf-icon-btn { width: 36px; height: 36px; border: 1px solid transparent; background: transparent; color: var(--sf-dim); cursor: pointer; font-size: 15px; }
 .sf-icon-btn:hover { color: var(--sf-accent); border-color: var(--sf-line); }
 
-.sf-tabs { display: flex; border-bottom: 1px solid var(--sf-line); background: rgba(0, 0, 0, 0.25); }
+.sf-tabs { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--sf-line); background: rgba(0, 0, 0, 0.25); }
+/* With a dozen tabs the console wraps them onto a second row rather than hiding the last ones. */
+.sf-tabs .sf-tab { flex: 1 0 64px; }
+.sf-tabs .sf-tab span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: 0.06em; }
 .sf-tabs:empty { display: none; }
 .sf-tab {
     position: relative;
@@ -338,7 +341,9 @@ body.sf-hud-open #sf-fab { opacity: 0.55; }
 /* Phone and narrow windows: the console becomes a full-screen sheet with tabs at the bottom. */
 @media (max-width: 1000px) {
     #sf-hud { top: 0; left: 0 !important; right: 0 !important; width: 100vw; height: 100dvh; border: 0; z-index: 9990; background: linear-gradient(180deg, rgba(var(--sf-accent-rgb), 0.07), transparent 140px), var(--sf-bg); }
-    #sf-hud .sf-tabs { order: 3; border-bottom: 0; border-top: 1px solid var(--sf-line); padding-bottom: env(safe-area-inset-bottom, 0); }
+    #sf-hud .sf-tabs { order: 3; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; border-bottom: 0; border-top: 1px solid var(--sf-line); padding-bottom: env(safe-area-inset-bottom, 0); }
+    #sf-hud .sf-tabs::-webkit-scrollbar { display: none; }
+    #sf-hud .sf-tabs .sf-tab { flex: 0 0 auto; min-width: 58px; padding-left: 6px; padding-right: 6px; }
     #sf-hud .sf-tab { padding: 10px 2px 8px; border-bottom: 0; border-top: 2px solid transparent; }
     #sf-hud .sf-tab.active { border-top-color: var(--sf-accent); }
     #sf-hud .sf-hud-head { padding-top: calc(8px + env(safe-area-inset-top, 0)); }

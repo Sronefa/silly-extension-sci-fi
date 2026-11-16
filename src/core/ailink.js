@@ -2,8 +2,8 @@
 // and hidden <sf>…</sf> update tags parsed out of AI replies.
 import { ctx, settings, MODULE, on } from './st.js';
 import { S, commit, snapshot, rollbackTo, fmtDate, locationLabel, cargoUsed, cargoCap, shipClass, currentSystem, galaxy, addLog } from './state.js';
-import { runBlock, needStatuses, transitInfo, fmtDuration, advanceTime, setAiTimeBudget, passMinutes } from '../systems/sim.js';
-import { estimateMinutes, grantPrompt, grantLine, passTime, pendingAsk, setPendingAsk, takeTypedAsk } from '../systems/clock.js';
+import { runBlock, needStatuses, transitInfo, fmtDuration, advanceTime, setAiTimeBudget, passMinutes, aiTimeLeft, aiCreditsLeft } from '../systems/sim.js';
+import { estimateMinutes, grantPrompt, grantLine, passTime, pendingAsk, pendingAsleep, setPendingAsk, takeTypedAsk } from '../systems/clock.js';
 import { toast } from './st.js';
 import { fmtInt } from './util.js';
 import { NEEDS, SHIP_SYSTEMS, FACTIONS, SHIP_WEAPONS, PERSONAL_WEAPONS, ARMORS } from '../data/catalog.js';
@@ -262,16 +262,25 @@ function registerMacros() {
         ['shipos', () => (live() ? buildTelemetry() : ''), 'Ship-OS: rules, state and now together'],
     ];
     for (const [key, fn, desc] of defs) {
-        try { c.registerMacro?.(key, fn, desc); } catch (e) { console.warn('[Ship-OS] macro not registered', key, e); }
+        try {
+            // Current SillyTavern has a macro registry; older builds and ports only have registerMacro.
+            if (c.macros?.register) c.macros.register(key, { handler: () => fn(), description: desc });
+            else c.registerMacro?.(key, fn, desc);
+        } catch (e) { console.warn('[Ship-OS] macro not registered', key, e); }
     }
 }
 
-function processMessage(mesId) {
+function processMessage(mesId, type = '') {
     const cfg = settings();
     if (!cfg.enabled || !S()) return;
     const c = ctx();
     const msg = c.chat?.[mesId];
     if (!msg || msg.is_user || msg.is_system || typeof msg.mes !== 'string') return;
+    // "Continue" lengthens a reply that was already processed: only the new text counts, the
+    // snapshot from before the reply stays (so a swipe still undoes all of it), and what the
+    // reply may still add in time and money carries on from where it stopped.
+    const prev = type === 'continue' ? msg.extra?.scifi_os : null;
+    if (prev && Number.isFinite(prev.len)) return processContinue(mesId, msg, prev);
     // Snapshot first, so a swipe or delete restores everything this reply consumed or changed.
     snapshot(mesId);
     // Any AI reply has narrated whatever event or check was queued, so they are consumed.
@@ -284,7 +293,7 @@ function processMessage(mesId) {
     // A stretch the player asked for has already been put on the clock; this reply narrates it.
     const granted = !!cur.timeGrant;
     cur.timeGrant = null;
-    setAiTimeBudget(granted ? 15 : 60);
+    setAiTimeBudget(granted ? 15 : 60, { credits: AI_REPLY_CREDITS });
     TAG_RE.lastIndex = 0;
     const hasTags = cfg.aiCommands && TAG_RE.test(msg.mes);
     // Every reply takes some story time. If the AI did not say how much, assume a short beat.
@@ -292,21 +301,12 @@ function processMessage(mesId) {
     const timed = (hasTags && /(^|[\n;>])\s*time\b/i.test(msg.mes)) || granted;
     const deferTime = replyHooks.length > 0 && cfg.tracker;
     if (!timed && !deferTime) autoTime(msg.mes);
-    if (!hasTags) { runReplyHooks(mesId, msg, timed); return; }
+    if (!hasTags) { remember(msg, [], [], timed); runReplyHooks(mesId, msg, timed); return; }
 
     const applied = [];
     const failed = [];
-    TAG_RE.lastIndex = 0;
-    msg.mes = msg.mes.replace(TAG_RE, (_, a, b) => {
-        for (const r of runBlock(a ?? b ?? '', { ai: true })) {
-            if (!r.text) continue;
-            (r.ok ? applied : failed).push(r.text);
-        }
-        return '';
-    }).trimEnd();
-
-    msg.extra ??= {};
-    msg.extra.scifi_os = { applied, failed };
+    msg.mes = applyTags(msg.mes, applied, failed);
+    remember(msg, applied, failed, timed);
     if (Array.isArray(msg.swipes) && msg.swipe_id !== undefined) msg.swipes[msg.swipe_id] = msg.mes;
     if (failed.length) console.warn('[Ship-OS] ignored AI commands:', failed);
     commit('ai');
@@ -314,6 +314,48 @@ function processMessage(mesId) {
     try { c.updateMessageBlock?.(mesId, msg); } catch { /* not rendered yet */ }
     c.saveChat?.();
     runReplyHooks(mesId, msg, timed);
+}
+
+// The most the story may hand over in one reply, however many credit commands it writes.
+const AI_REPLY_CREDITS = 2000;
+
+/** Runs the hidden command blocks in a reply and returns the reply without them. */
+function applyTags(text, applied, failed) {
+    TAG_RE.lastIndex = 0;
+    return text.replace(TAG_RE, (_, a, b) => {
+        for (const r of runBlock(a ?? b ?? '', { ai: true })) {
+            if (!r.text) continue;
+            (r.ok ? applied : failed).push(r.text);
+        }
+        return '';
+    }).trimEnd();
+}
+
+/** What a reply did, kept on the message: the chips under it, and where a "continue" picks up. */
+function remember(msg, applied, failed, timed) {
+    msg.extra ??= {};
+    msg.extra.scifi_os = { applied, failed, len: msg.mes.length, timed: !!timed, timeLeft: aiTimeLeft(), creditsLeft: aiCreditsLeft() };
+}
+
+function processContinue(mesId, msg, prev) {
+    const cfg = settings();
+    const c = ctx();
+    setAiTimeBudget(prev.timeLeft ?? 60, { credits: prev.creditsLeft ?? AI_REPLY_CREDITS });
+    const head = msg.mes.slice(0, prev.len);
+    let tail = msg.mes.slice(prev.len);
+    TAG_RE.lastIndex = 0;
+    const hasTags = cfg.aiCommands && TAG_RE.test(tail);
+    const timed = prev.timed || (hasTags && /(^|[\n;>])\s*time\b/i.test(tail));
+    if (!timed && !(replyHooks.length > 0 && cfg.tracker)) autoTime(tail);
+    const applied = [...(prev.applied ?? [])];
+    const failed = [...(prev.failed ?? [])];
+    if (hasTags) tail = applyTags(tail, applied, failed);
+    msg.mes = (head + tail).trimEnd();
+    remember(msg, applied, failed, timed);
+    if (Array.isArray(msg.swipes) && msg.swipe_id !== undefined) msg.swipes[msg.swipe_id] = msg.mes;
+    commit('ai');
+    try { c.updateMessageBlock?.(mesId, msg); } catch { /* not rendered yet */ }
+    if (hasTags) c.saveChat?.();
 }
 
 const replyHooks = [];
@@ -349,14 +391,15 @@ function processUserMessage(mesId) {
     const msg = c.chat?.[mesId];
     if (!msg || !msg.is_user || typeof msg.mes !== 'string') return;
     let ask = pendingAsk();
+    let asleep = pendingAsleep();
     setPendingAsk(null);
     const typed = takeTypedAsk(msg.mes);
-    if (typed) { ask = typed.mins; msg.mes = typed.text; }
+    if (typed) { ask = typed.mins; asleep = typed.asleep; msg.mes = typed.text; }
     if (!ask) return;
     snapshot(mesId);
     let line;
     try {
-        const g = passTime(ask, { what: msg.mes });
+        const g = passTime(ask, { what: msg.mes, asleep });
         line = grantLine(g);
         if (g.granted < g.asked) toast('info', line);
     } catch (e) {
@@ -393,7 +436,7 @@ function decorateAll() {
 }
 
 export function initAiLink() {
-    on('MESSAGE_RECEIVED', (id) => { processMessage(Number(id)); refreshPrompt(); });
+    on('MESSAGE_RECEIVED', (id, type) => { processMessage(Number(id), type); refreshPrompt(); });
     on('MESSAGE_SENT', (id) => processUserMessage(Number(id)));
     on('USER_MESSAGE_RENDERED', (id) => { const n = Number(id); const m = ctx().chat?.[n]; if (m?.extra?.scifi_os) { try { ctx().updateMessageBlock?.(n, m); } catch { /* */ } decorateMessage(n); } });
     on('CHARACTER_MESSAGE_RENDERED', (id) => decorateMessage(Number(id)));

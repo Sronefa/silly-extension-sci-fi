@@ -189,8 +189,18 @@ function renderHud() {
     }
     const shown = tabs.filter(t => !t.when || t.when(st));
     if (!shown.some(t => t.id === active)) active = shown.find(t => t.id === 'status')?.id ?? shown[0]?.id;
+    const navScroll = nav.scrollLeft;
     nav.innerHTML = shown.map(t => `<button type="button" class="sf-tab${t.id === active ? ' active' : ''}" data-sf="tab" data-tab="${t.id}">
         <i class="fa-solid ${t.icon}"></i><span>${esc(t.label)}</span>${t.badge?.(st) ? `<b class="sf-badge">${esc(t.badge(st))}</b>` : ''}</button>`).join('');
+    // Rebuilding the tab bar must not throw it back to the start: on a phone the bar scrolls
+    // sideways, and the tab just tapped has to stay in sight.
+    nav.scrollLeft = navScroll;
+    const on = nav.querySelector('.sf-tab.active');
+    if (on && nav.scrollWidth > nav.clientWidth) {
+        const l = on.offsetLeft - nav.offsetLeft, r = l + on.offsetWidth;
+        if (l < nav.scrollLeft) nav.scrollLeft = l - 8;
+        else if (r > nav.scrollLeft + nav.clientWidth) nav.scrollLeft = r - nav.clientWidth + 8;
+    }
     const tab = tabs.find(t => t.id === active);
     const scroll = body.dataset.tab === active ? body.scrollTop : 0;
     body.dataset.tab = active;
