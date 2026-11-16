@@ -459,6 +459,7 @@ function arrivalChecks(st) {
     const w = (st.warrants ?? []).find(x => x.faction === sys.faction);
     if (w && sys.security >= 3 && st.loc.docked && Math.random() < 0.5) {
         const owed = totalDebt(st);
+        if (w.reason) return imprison(st, clamp((w.amount ?? 0) / 400, 14, 365), w.reason);
         return imprison(st, w.escape ? 120 : clamp(owed / 400, 14, 365), w.escape ? 'escaping lawful custody' : `defaulting on ${fmt(owed)} cr of debt`);
     }
     // Indentured debtors who leave Combine space are treated as runaways.

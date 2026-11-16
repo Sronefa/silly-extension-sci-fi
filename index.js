@@ -5,6 +5,7 @@ import { initRefitUi } from './src/ui/refit.js';
 import { initDecksUi } from './src/ui/decks.js';
 import { initMarketUi } from './src/ui/market.js';
 import { initLifeUi } from './src/ui/life.js';
+import { initContractsUi } from './src/ui/contracts.js';
 import { initTimeBar } from './src/ui/timebar.js';
 import { settings, on } from './src/core/st.js';
 import { S, migrate, notify } from './src/core/state.js';
@@ -38,6 +39,7 @@ function start() {
         initDecksUi();
         initMarketUi();
         initLifeUi();
+        initContractsUi();
         initAgentsUi();
         initHud();
         initTimeBar();

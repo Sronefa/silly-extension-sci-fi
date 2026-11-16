@@ -98,7 +98,7 @@ function bankHtml(st) {
     const flags = [
         st.indenture ? 'Indentured to Combine Credit: 70% of your wages are garnished.' : '',
         st.bounty ? `The moneylenders have ${cr(st.bounty)} on your head.` : '',
-        ...(st.warrants ?? []).map(w => `Debtor's warrant in ${w.faction} space${w.escape ? ' (escaped custody)' : ''}.`),
+        ...(st.warrants ?? []).map(w => (w.reason ? `Warrant in ${w.faction} space for ${w.reason}.` : `Debtor's warrant in ${w.faction} space${w.escape ? ' (escaped custody)' : ''}.`)),
     ].filter(Boolean).map(t => `<div class="sf-warn-line"><i class="fa-solid fa-triangle-exclamation"></i> ${esc(t)}</div>`).join('');
     const lend = offers.map(o => `<li class="sf-row"><span class="sf-grow"><b>${esc(LENDERS[o.lender].name)}</b> <small class="sf-dim">${(LENDERS[o.lender].rate * 100).toFixed(2)}% a week · up to ${cr(o.max)}</small><br><small class="${o.why ? 'sf-warn-line' : 'sf-dim'}">${esc(o.why || LENDERS[o.lender].desc)}</small></span>
         ${btn('life-borrow', 'Borrow', { data: { lender: o.lender, max: o.max }, disabled: !o.max })}</li>`).join('');
