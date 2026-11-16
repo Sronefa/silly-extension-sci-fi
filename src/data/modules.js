@@ -77,6 +77,7 @@ export function hullSlots(cls) {
     if (cls.mechBay) stock.push('mechbay');
     if (cls.dcBonus) stock.push('workshop');
     if (cls.ram) stock.push('prow');
+    if (/salvage/i.test(cls.role)) stock.push('salvagerig');
     for (let i = 0; i < Math.max(bays, stock.length); i++) {
         const st = stock[i] ?? null;
         push('bay', Math.max(Math.min(4, cls.size), st ? MODULES[st].size : 0), { stock: st });

@@ -16,6 +16,8 @@ import { startCombat, parseEnemies } from '../systems/combat.js';
 import { registerCommand } from '../systems/sim.js';
 import { registerPromptSection } from '../core/ailink.js';
 import { blip } from './sfx.js';
+import { deckPlan } from '../data/decks.js';
+import { boardPrize } from '../systems/salvage.js';
 
 const can = (domain, sc = SC()) => !!sc && consoles(sc).includes(domain);
 const live = (sc = SC()) => { const ps = playerShip(sc); return !!ps && isActive(ps) && !sc.over; };
@@ -477,7 +479,12 @@ export function initShipCombatUi() {
         'sc-act'(el) { act(() => { const sc = SC(); sc.playerAct = sc.playerAct === el.dataset.a ? null : el.dataset.a; }); },
         'sc-abort'() { abortShipCombat(); addLog('Space battle aborted.', 'combat'); commit('shipcombat'); },
         'sc-dismiss'() { S().lastShipCombat = null; commit('shipcombat'); },
-        'sc-salvage'(el) { act(() => { const cr = salvagePrize(el.dataset.id); if (cr) toast('success', `Salvage worth ${fmtInt(cr)} cr.`); }); },
+        'sc-salvage'(el) {
+            const p = S().lastShipCombat?.prizes.find(x => x.id === el.dataset.id);
+            // Anything with an inside is explored compartment by compartment; strike craft are stripped from outside.
+            if (p && deckPlan(VESSELS[p.cls])) { act(() => { toast('success', boardPrize(p.id)); openHud('wreck'); }); return; }
+            act(() => { const cr = salvagePrize(el.dataset.id); if (cr) toast('success', `Salvage worth ${fmtInt(cr)} cr.`); });
+        },
         'sc-board'(el) {
             const st = S();
             const p = st.lastShipCombat?.prizes.find(x => x.id === el.dataset.id);

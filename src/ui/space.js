@@ -201,7 +201,7 @@ export function initSpaceUi() {
     registerWidget({ id: 'spsurvey', title: () => 'Sensor survey', render: surveyHtml, when: (st) => !!st.ship });
     registerWidget({ id: 'spdesk', title: () => 'Cartography desk', render: deskHtml });
     registerWidget({ id: 'mnfield', title: () => 'Mining', render: fieldHtml });
-    registerTab({ id: 'space', label: 'Space', icon: 'fa-satellite', order: 21, when: (st) => !st.custody && !!st.ship, widgets: ['spsites', 'spsurvey', 'spdesk'] });
+    registerTab({ id: 'space', label: 'Space', icon: 'fa-satellite', order: 21, when: (st) => !st.custody && !!st.ship, widgets: ['spsites', 'spsurvey', 'svparts', 'spdesk'] });
     // No mining lasers, no mining tab.
     registerTab({ id: 'mining', label: 'Mining', icon: 'fa-meteor', order: 22, when: (st) => !st.custody && canMine(st), widgets: ['mnfield'], badge: (st) => (shipInField(st) ? '•' : '') });
     registerActions({

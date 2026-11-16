@@ -90,6 +90,8 @@ export function present(st, a = st.activity) {
     if (!a) return false;
     if (a.custody) return !!st.custody;
     // Work out in space: the ship has to be in the system, out of dock, and at the site if there is one.
+    // Work aboard a wreck happens in one compartment of it.
+    if (a.wreck && (st.salvage?.key !== a.wreck || st.salvage.at !== a.room)) return false;
     if (a.space) return !st.transit && !st.cruise && !st.loc.docked && st.loc.system === a.sys && (!a.site || st.loc.site === a.site);
     const p = port(st);
     return !!p && p.key === a.key && (!a.area || areaOf(st) === a.area);
