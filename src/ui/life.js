@@ -207,11 +207,11 @@ function promptSection(st) {
     const c = st.custody;
     if (c?.type === 'prison') {
         state.push(`${st.captain.name} is a prisoner in the ${galaxy().systems[c.sys].name} Penitentiary (${c.reason}), with ${fmtDuration(c.until - st.minutes)} left to serve. They own nothing and cannot leave.`);
-        rules.push('CUSTODY: play prison life as it comes, in story time: the cell block, work details, other prisoners, guards. Never shorten the sentence and never release the character yourself.');
+        rules.push('<custody>\nPlay prison life as it comes, in story time: the cell block, work details, other prisoners, guards. Never shorten the sentence and never release the character yourself.\n</custody>');
     }
     if (c?.type === 'slave') {
         state.push(`${st.captain.name} is a slave (${ownerKind(c).type.toLowerCase()}), the property of ${c.owner}: ${c.work}. They own nothing, have no rights here and cannot leave. Owner's trust: ${Math.round(c.trust)}%.${c.until ? ` The bond has ${fmtDuration(c.until - st.minutes)} left to run.` : ''}${c.need ? ` Pit victories: ${c.wins} of ${c.need}.` : ''} ${exitsText(c)}`);
-        rules.push('CUSTODY: play this life as it comes, in story time, and do not soften it. The character gets out only through the game. If the story itself frees them (a raid, a rescue by named characters), add the command: release.');
+        rules.push('<custody>\nPlay this life as it comes, in story time, and do not soften it. The character gets out only through the game. If the story itself frees them (a raid, a rescue by named characters), add the command: release.\n</custody>');
     }
     const act = activityPrompt(st);
     if (act.rules) rules.push(act.rules);
@@ -228,7 +228,7 @@ function promptSection(st) {
             if (miss.length) state.push(`${st.captain.name} is flying without the ${miss.map(id => LICENCES[id].name).join(' or the ')}.`);
         }
         if (st.captain.course) state.push(`${st.captain.name} is a student pilot working toward the ${LICENCES[st.captain.course.id].name}.`);
-        rules.push(`LIFE: wages, loans, ship purchases, licences and sentences are run by the game. Never invent payments, pardons or releases. If the story has the character arrested and convicted, add: arrest <days> "offence". If they are captured and sold by slavers or pirates, add: enslave "owner name" <${OWNERS.map(o => o.kind).join('|')}> [nosale] (the kind of owner decides the kind of bondage; nosale for an owner who will never sell them their freedom).`);
+        rules.push(`<life>\nWages, loans, ship purchases, licences and sentences are run by the game. Never invent payments, pardons or releases. If the story has the character arrested and convicted, add: arrest <days> "offence". If they are captured and sold by slavers or pirates, add: enslave "owner name" <${OWNERS.map(o => o.kind).join('|')}> [nosale] (the kind of owner decides the kind of bondage; nosale for an owner who will never sell them their freedom).\n</life>`);
     }
     return { rules: rules.join('\n\n'), state: state.join('\n'), now: act.now };
 }

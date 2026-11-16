@@ -46,7 +46,7 @@ const hasShipLife = (st) => !!(st.ship || st.post || st.craft?.length || st.tran
 /** The commands the storyteller may use, limited to what fits the character's situation. */
 export function COMMAND_GUIDE(st = S()) {
     const L = ['Commands, one per line:'];
-    L.push('- time +Ns|+Nm|+Nh: how long the reply covered (see TIME).');
+    L.push('- time +Ns|+Nm|+Nh: how long the reply covered (see <time>).');
     L.push('- credits/debt/health/stress ±N; health "party member" ±N; nourishment/hydration/rest/hygiene/morale ±N.');
     L.push('- item add|remove "name" N; cargo add|remove "name" N; xp <skill> N (5 to 20, when a skill was really put to use).');
     L.push('- wound <head|thorax|abdomen|"left arm"|"right arm"|"left leg"|"right leg"> N [bleed|arterial|fracture|burn|concussion] for harm outside a fight; injury add "name" minor|moderate|severe|critical; injury heal "name"; die "cause" (only when the character is truly killed).');
@@ -62,32 +62,38 @@ export function COMMAND_GUIDE(st = S()) {
     return L.join('\n');
 }
 
-const TIME_RULE = 'TIME: the clock in <ship_os_now> is the truth, and it moves only by what your reply really covers. '
-    + 'Give that as precisely as you can, usually seconds or minutes: a line or two of talk +20s to +1m; a short exchange +2m to +5m; a longer conversation or a small task +10m to +30m; a meal +20m to +45m. '
-    + 'Never cover more than an hour in one reply. Longer stretches (a work shift, waiting, travel, sleep) pass only when the player asks for them: the game then puts them on the clock and tells you in <ship_os_now>, and you narrate that stretch without a time command for it. '
-    + 'Nothing is skipped: journeys, shifts, courses and sentences are lived as scenes, and you never jump to their end.';
-const FIGHT_RULE = 'FIGHTS: the game resolves every fight. When violence breaks out, stop at the instant it begins (with the combat command if you can use commands). Never narrate its course or outcome until the game gives you the result.';
+const tag = (name, body) => `<${name}>\n${body}\n</${name}>`;
+
+const TIME_RULE = tag('time', 'The clock in <ship_os_now> is the truth, and it moves only by what your reply really covers. Simulate realistic time passage.\n'
+    + '- Give that time as precisely as you can, usually seconds or minutes: a line or two of talk +20s to +1m; a short exchange +2m to +5m; a longer conversation or a small task +10m to +30m; a meal +20m to +45m.\n'
+    + '- Never cover more than an hour in one reply. Longer stretches (a work shift, waiting, travel, sleep) pass only when the player asks for them: the game then puts them on the clock and tells you in <ship_os_now>, and you narrate that stretch without a time command for it.\n'
+    + '- Nothing is skipped: journeys, shifts, courses and sentences are lived as scenes, and you never jump to their end.');
+const FIGHT_RULE = tag('fights', 'The game resolves every fight. When violence breaks out, stop at the instant it begins (with the combat command if you can use commands). Never narrate its course or outcome until the game gives you the result.');
+const WORLD_RULE = tag('world', '- Realism over balance: danger follows from the story, never from the character\'s strength. A job far beyond them stays far beyond them.\n'
+    + '- Failures have real, lasting consequences. Nothing the character lacks (money, gear, a licence, a ship) turns up conveniently.\n'
+    + '- People have their own agendas and know only what they would realistically know. The character is not the leader of anyone unless the story made them so.');
 
 /** Standing instructions: they change only when the situation does, so they sit high and cache well. */
 export function buildRules(st = S(), sec = st && sections(st)) {
     if (!st) return '';
     const cfg = settings();
     const L = [];
-    L.push('You are the storyteller of a role-play run by a game engine called Ship-OS. The engine owns the facts: time, money, health, needs, cargo, prices, and the outcome of fights, checks, jobs and sentences. You own the words: what people say and do, and how the world looks and feels.');
-    L.push('The engine sends you <ship_os_state> (the world as it is) and <ship_os_now> (what is happening this moment). They are true and private: keep the story consistent with them, never contradict their numbers, and never quote them, print stat blocks or mention the engine.');
+    L.push(tag('role', 'You are the storyteller of a role-play run by a game engine called Ship-OS. The engine owns the facts: time, money, health, needs, cargo, prices, and the outcome of fights, checks, jobs and sentences. You own the words: what people say and do, and how the world looks and feels.'));
+    L.push(tag('truth', 'Each turn the engine sends <ship_os_state> (the world as it is) and <ship_os_now> (this moment, and what to narrate now). They are the authoritative, read-only state at the start of the turn and already include everything that happened before. Never recompute or reconcile them from earlier narration, never contradict their numbers, and never quote them, print stat blocks or mention the engine.'));
     if (st.dead) {
-        L.push('The player character is dead. Narrate the death and its aftermath only; the character takes no further actions.');
+        L.push(tag('death', 'The player character is dead. Narrate the death and its aftermath only; the character takes no further actions.'));
         return L.join('\n\n');
     }
-    L.push(FIGHT_RULE);
+    L.push(WORLD_RULE);
     L.push(TIME_RULE);
+    L.push(FIGHT_RULE);
     for (const r of sec.rules) L.push(r);
     if (cfg.aiCommands) {
-        L.push('STATE CHANGES: when your reply changes the world, end it with one hidden block that lists only what changed, one command per line, for example:\n<sf>\ncredits -40\nhydration +25\ntime +4m\n</sf>\n'
+        L.push(tag('state_changes', 'When your reply changes the world, end it with one hidden block that lists only what changed, one command per line, for example:\n<sf>\ncredits -40\nhydration +25\ntime +4m\n</sf>\n'
             + 'Always include the time command, unless <ship_os_now> says the player asked for the time that passed. Use a command only for what the story really shows happening, not for plans or offers.\n'
-            + COMMAND_GUIDE(st));
+            + COMMAND_GUIDE(st)));
     } else if (cfg.tracker) {
-        L.push('STATE CHANGES: the game reads your reply and records what changed by itself, so write only the story.');
+        L.push(tag('state_changes', 'The game reads your reply and records what changed by itself, so write only the story.'));
     }
     return L.join('\n\n');
 }
@@ -192,18 +198,55 @@ export const PROMPT_KEYS = { rules: `${MODULE}_rules`, state: MODULE, now: `${MO
 const ROLES = { system: 0, user: 1, assistant: 2 };
 const live = () => { const cfg = settings(); return cfg.enabled && cfg.inject && !!S(); };
 
+/**
+ * How the blocks reach the model:
+ *  - 'message' (default, as the Multihog framework does): the rules go after the main prompt, and
+ *    state and now are put at the head of the player's latest message by the generate interceptor.
+ *    That is where a model pays most attention, and no preset has to cope with system messages
+ *    in the middle of the chat. Only the copy sent to the model is changed, never the saved chat.
+ *  - 'depth': state and now are separate messages in the chat, at depth N and 0.
+ *  - 'macros': nothing is added; the preset places {{shipos_rules}} and the others itself.
+ */
+const mode = () => { const m = settings().injectMode; return m === 'depth' || m === 'macros' ? m : 'message'; };
+
 export function refreshPrompt() {
     const c = ctx();
     const cfg = settings();
-    const auto = live() && cfg.injectMode !== 'macros';
-    const p = auto ? buildParts() : { rules: '', state: '', now: '' };
+    const m = mode();
+    const on = live() && m !== 'macros';
+    const p = on ? buildParts() : { rules: '', state: '', now: '' };
     const role = ROLES[cfg.injectRole] ?? 0;
+    const inChat = m === 'depth';
     // Positions: 0 = after the story string / main prompt, 1 = in the chat at a depth.
     if (cfg.rulesAt === 'chat') c.setExtensionPrompt(PROMPT_KEYS.rules, p.rules, 1, Math.max(0, Number(cfg.rulesDepth) || 0), false, role);
     else c.setExtensionPrompt(PROMPT_KEYS.rules, p.rules, 0, 0, false, role);
-    c.setExtensionPrompt(PROMPT_KEYS.state, p.state, 1, Math.max(0, Number(cfg.injectDepth) || 0), false, role);
-    c.setExtensionPrompt(PROMPT_KEYS.now, p.now, 1, 0, false, role);
+    c.setExtensionPrompt(PROMPT_KEYS.state, inChat ? p.state : '', 1, Math.max(0, Number(cfg.injectDepth) || 0), false, role);
+    c.setExtensionPrompt(PROMPT_KEYS.now, inChat ? p.now : '', 1, 0, false, role);
 }
+
+/**
+ * SillyTavern's generate interceptor (named in manifest.json). It gets a copy of the chat that is
+ * about to be sent, so the player's message can carry this turn's state without being saved.
+ */
+async function interceptor(chat, _size, _abort, type) {
+    try {
+        if (mode() !== 'message' || !live() || type === 'quiet' || type === 'impersonate' || !Array.isArray(chat)) return;
+        const p = buildParts();
+        const head = [p.state, p.now].filter(Boolean).join('\n\n');
+        if (!head) return;
+        let i = chat.length - 1;
+        while (i >= 0 && !chat[i]?.is_user) i--;
+        if (i < 0) {
+            // No player message yet (the opening): the blocks go in as a narrator note at the end.
+            chat.push({ name: 'Ship-OS', is_user: false, is_system: false, mes: head, extra: { type: 'narrator' } });
+            return;
+        }
+        const msg = chat[i];
+        const text = String(msg.mes ?? '').trim() || '[The player continues without saying anything.]';
+        chat[i] = { ...msg, mes: `${head}\n\n<player_message>\n${text}\n</player_message>` };
+    } catch (e) { console.error('[Ship-OS] prompt interceptor failed', e); }
+}
+globalThis.shipOsInterceptor = interceptor;
 
 /**
  * Macros for presets that place the blocks themselves: {{shipos_rules}}, {{shipos_state}},

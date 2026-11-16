@@ -160,7 +160,7 @@ export function activityPrompt(st) {
     if (p && !st.custody) {
         const here = areaOf(st);
         out.state = `${st.captain.name} is at the ${areaName(st, here).toLowerCase()} of ${p.station.name}. Other areas (id: minutes on foot): ${areasHere(st).filter(x => x.id !== here).map(x => `${x.name} (${x.id}: ${walkTime(st, here, x.id)} min)`).join(', ')}.`;
-        out.rules = 'PLACES IN A STATION: nobody teleports. When the character goes to another area, narrate the way there and add the command: area <id>. The game adds the walking time itself. Use area, not location, for places inside the station.';
+        out.rules = '<places>\nNobody teleports. When the character goes to another area, narrate the way there and add the command: area <id>. The game adds the walking time itself. Use area, not location, for places inside the station.\n</places>';
     }
     if (a && !a.on) {
         const where = a.area ? `at the ${areaName(st, a.area).toLowerCase()}` : 'there';

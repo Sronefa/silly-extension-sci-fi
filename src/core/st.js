@@ -31,7 +31,7 @@ export const DEFAULT_SETTINGS = {
     // AI link
     inject: true,
     injectDepth: 1,
-    injectMode: 'auto',
+    injectMode: 'message',
     injectRole: 'system',
     rulesAt: 'prompt',
     rulesDepth: 8,
@@ -55,6 +55,8 @@ export function settings() {
     }
     // Replies used to cost a flat five minutes; they are now timed by what they cover.
     if (s.timeRules !== 2) { s.timeRules = 2; if (Number(s.autoMinutes) === 5) s.autoMinutes = 0; }
+    // The first preset-friendly build called the default mode 'auto'.
+    if (s.injectMode === 'auto') s.injectMode = 'message';
     return s;
 }
 
