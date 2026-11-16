@@ -116,18 +116,6 @@ export function quit() {
     return kinds[a.kind]?.miss?.(st, a, 'cancelled') ?? `Cancelled: ${a.name}`;
 }
 
-/** Gets on with it for a while without a scene. The time still passes minute for minute. */
-export function carryOn(mins = 60) {
-    const st = S();
-    const a = st.activity;
-    if (!a?.on) throw new Error('you have not started anything');
-    if (!present(st, a)) throw new Error('you are not there');
-    const m = Math.min(mins, a.need - a.done);
-    const name = a.name;
-    advanceTime(m);
-    return st.activity ? `${fmtDuration(m)} of ${name.toLowerCase()} done, ${fmtDuration(st.activity.need - st.activity.done)} to go` : '';
-}
-
 /** A scene prompt this commitment queued and nobody narrated yet gives way to what happened next. */
 function dropEvent(st, a) { if (a.ev && st.pendingEvent === a.ev) st.pendingEvent = null; }
 
@@ -178,7 +166,7 @@ export function activityPrompt(st) {
         L.push(`BOOKED: ${a.name}, ${fmtDuration(a.need)} long. ${st.captain.name} must be ${where} and start within ${fmtDuration(Math.max(0, a.by - st.minutes))} or lose it. It has NOT started. They still have to get there${present(st, a) ? ' (they are in the right place now)' : ''}; the player starts it from the game panel. Do not narrate the work itself yet.`);
     }
     if (a?.on) {
-        L.push(`IN PROGRESS: ${a.name}. ${fmtDuration(a.done)} done, ${fmtDuration(a.need - a.done)} still to go. This is lived, never skipped: play it as scenes (the task in hand, the people around, small troubles). Advance the clock only by what a reply actually covers, with time +Nm, and never by more than two hours in one reply. Do not jump to the end, and do not pay, pass, fail or reward anything: the game resolves it when the time has really been put in.${a.note ? ` ${a.note}` : ''}${a.area ? ` Leaving the ${areaName(st, a.area).toLowerCase()} for long means walking out on it.` : ''}`);
+        L.push(`IN PROGRESS: ${a.name}. ${fmtDuration(a.done)} done, ${fmtDuration(a.need - a.done)} still to go. This is lived, never skipped: play it as scenes (the task in hand, the people around, small troubles). Advance the clock only by what a reply actually covers. Longer stretches of it pass only when the player asks for them. Do not jump to the end, and do not pay, pass, fail or reward anything: the game resolves it when the time has really been put in.${a.note ? ` ${a.note}` : ''}${a.area ? ` Leaving the ${areaName(st, a.area).toLowerCase()} for long means walking out on it.` : ''}`);
     }
     return L.join('\n');
 }

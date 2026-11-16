@@ -25,7 +25,7 @@ export const DEFAULT_SETTINGS = {
     needsDecay: true,
     needsRate: 1,
     encounters: true,
-    autoMinutes: 5,
+    autoMinutes: 0,
     combatSpeech: false,
     wages: true,
     // AI link
@@ -49,6 +49,8 @@ export function settings() {
     for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) {
         if (s[k] === undefined) s[k] = v;
     }
+    // Replies used to cost a flat five minutes; they are now timed by what they cover.
+    if (s.timeRules !== 2) { s.timeRules = 2; if (Number(s.autoMinutes) === 5) s.autoMinutes = 0; }
     return s;
 }
 

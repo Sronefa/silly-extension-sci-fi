@@ -888,3 +888,13 @@ body.sf-theme ::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.25); }
 
 /* Commitments: a shift, a lesson, a day's forced work */
 .sf-act-bar { display: block; margin-top: 6px; height: 3px; }
+
+/* The hourglass in the chat bar: ask for time to pass with the next message */
+#sf-time-but { color: var(--sf-accent, #4fd1ff); }
+#sf-time-but.sf-time-armed { color: var(--sf-warn, #ffb347); text-shadow: 0 0 6px rgba(255, 179, 71, 0.6); }
+#sf-time-chip { align-self: center; padding: 1px 6px; margin-right: 2px; font: 11px var(--sf-font-mono, monospace); color: var(--sf-warn, #ffb347); border: 1px solid currentColor; cursor: pointer; white-space: nowrap; }
+.sf-time-pop { position: fixed; z-index: 10050; padding: 10px; background: var(--sf-bg, #07121c); border: 1px solid var(--sf-line, #1d4a63); box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6); color: var(--sf-text, #cfe6f2); font-family: var(--sf-font, inherit); display: flex; flex-direction: column; gap: 8px; }
+.sf-time-head { font: 600 12px var(--sf-font-head, inherit); letter-spacing: 0.12em; text-transform: uppercase; color: var(--sf-accent, #4fd1ff); }
+.sf-time-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.sf-time-row .sf-btn { padding: 4px 10px; min-height: 0; }
+.sf-time-in { flex: 1 1 120px; min-width: 0; margin: 0; }
