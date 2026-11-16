@@ -14,7 +14,7 @@ import {
     yardStock, inspect, listingWear, buyQuote, buyShip, sellShip, tradeIn, layUpQuote, layUp, reclaim, paperCheck, lifeTick,
 } from '../systems/life.js';
 import { loans, loanOffers, takeLoan, repay, financeTick, arrivalChecks, imprison, enslave, release, custodyAct, totalDebt, ownerKind, exitsText } from '../systems/finance.js';
-import { areasHere, areaOf, areaName, walkTime, moveTo, clockIn, quit, carryOn, present, activityTick, activityPrompt } from '../systems/activity.js';
+import { areasHere, areaOf, areaName, walkTime, moveTo, clockIn, quit, present, activityTick, activityPrompt } from '../systems/activity.js';
 import { registerCommand, onTick, onArrival, advanceTime, fmtDuration, isAiCommand } from '../systems/sim.js';
 import { registerPromptSection } from '../core/ailink.js';
 import { galaxy } from '../core/state.js';
@@ -41,8 +41,8 @@ function activityHtml(st) {
     const left = a.need - a.done;
     return `<div class="sf-note"><b>${esc(a.name)}</b><br>${esc(fmtDuration(a.done))} done, ${esc(fmtDuration(left))} to go.${here ? '' : ` <span class="sf-warn-line">You have left the ${esc(place)}: ${Math.max(0, 45 - a.away)} min before it counts as walking out.</span>`}
             <span class="sf-xp sf-act-bar"><span style="width:${Math.round(100 * a.done / a.need)}%"></span></span></div>
-        <small class="sf-dim">The time is lived: it passes as the story does. Play the scene in the chat, or get on with it quietly an hour at a time.</small>
-        <div class="sf-actions">${btn('act-carry', `Get on with it (${left >= 60 ? '1 h' : `${left} min`})`, { icon: 'fa-hourglass-half', disabled: !here })}${btn('act-quit', a.custody ? 'Down tools' : 'Walk out', { icon: 'fa-door-open' })}</div>`;
+        <small class="sf-dim">The time is lived: it passes as the story does. To let a stretch of it go by, write what your character does and use the hourglass <i class="fa-solid fa-hourglass-half"></i> in the chat bar.</small>
+        <div class="sf-actions">${btn('act-quit', a.custody ? 'Down tools' : 'Walk out', { icon: 'fa-door-open' })}</div>`;
 }
 
 function whereHtml(st) {
@@ -245,7 +245,6 @@ export function initLifeUi() {
         'life-work'(el) { act(() => takeShift(el.dataset.id)); },
         'area-go'(el) { act(() => moveTo(el.dataset.id)); },
         'act-start'() { act(() => clockIn()); },
-        'act-carry'() { act(() => carryOn(60)); },
         async 'act-quit'() { const a = S().activity; if (a && (!a.on || await confirmAsk('Walk out?', 'You lose what is left of it.'))) act(() => quit()); },
         'life-live'(el) { act(() => living(el.dataset.kind)); },
         'life-enrol'(el) { act(() => enrol(el.dataset.id)); },

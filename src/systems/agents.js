@@ -72,7 +72,7 @@ async function trackerPass({ mesId, msg, timed }) {
     // The reply may have been swiped, deleted or the chat changed while the model was thinking.
     const stale = chatKey() !== chat || ctx().chat?.[mesId] !== msg || msg.swipe_id !== swipe || msg.mes !== text || S() !== st;
     if (stale) return;
-    if (!lines) { if (!timed) autoTime(); return; }
+    if (!lines) { if (!timed) autoTime(msg.mes); return; }
     if (timed) lines = lines.filter(l => !/^time\b/i.test(l));
     if (st.combat || already.some(a => /^combat started/i.test(a))) lines = lines.filter(l => !/^(combat|fight|battle|encounter)\b/i.test(l));
     const applied = [];
@@ -81,7 +81,7 @@ async function trackerPass({ mesId, msg, timed }) {
         if (!r.text) continue;
         (r.ok ? applied : failed).push(r.text);
     }
-    if (!timed && !lines.some(l => /^time\b/i.test(l))) autoTime();
+    if (!timed && !lines.some(l => /^time\b/i.test(l))) autoTime(msg.mes);
     if (failed.length) console.warn('[Ship-OS] tracker commands ignored:', failed);
     if (applied.length) {
         msg.extra ??= {};

@@ -2,7 +2,9 @@
 // and hidden <sf>…</sf> update tags parsed out of AI replies.
 import { ctx, settings, MODULE, on } from './st.js';
 import { S, commit, snapshot, rollbackTo, fmtDate, locationLabel, cargoUsed, cargoCap, shipClass, currentSystem, galaxy, addLog } from './state.js';
-import { runBlock, needStatuses, transitInfo, fmtDuration, advanceTime } from '../systems/sim.js';
+import { runBlock, needStatuses, transitInfo, fmtDuration, advanceTime, setAiTimeBudget, passMinutes } from '../systems/sim.js';
+import { estimateMinutes, grantPrompt, grantLine, passTime, pendingAsk, setPendingAsk, takeTypedAsk } from '../systems/clock.js';
+import { toast } from './st.js';
 import { fmtInt } from './util.js';
 import { NEEDS, SHIP_SYSTEMS, FACTIONS, SHIP_WEAPONS, PERSONAL_WEAPONS, ARMORS } from '../data/catalog.js';
 import { ATTRIBUTES, SKILL_DEFS, TRAITS, FLAWS, CYBERWARE, CRAFT_CLASSES } from '../data/chargen.js';
@@ -107,16 +109,18 @@ export function buildTelemetry({ instructions = true } = {}) {
         } catch (e) { console.error('[Ship-OS] prompt section failed', e); }
     }
     if (st.pendingEvent) L.push(`EVENT TO NARRATE NOW: ${st.pendingEvent}`);
+    const grant = grantPrompt(st);
+    if (grant) L.push(grant);
 
     if (instructions && cfg.aiCommands) {
         L.push('[SHIP-OS UPDATES. When events in your reply change the state above, end the reply with one hidden block listing only what actually changed, one command per line, in this format: <sf>credits -200\ntime +3h\nhull -15</sf>. '
             + COMMAND_GUIDE() + ' '
             + 'FIGHTS: when violence breaks out, do NOT narrate the fight. Stop at the instant it begins and add the combat command. The game resolves the fight and gives you the result to narrate afterwards. '
-            + 'TIME: always include a time command for how long the scene took, usually minutes. Never skip ahead hours or days on your own. Never mention the block in the narration.]');
+            + 'TIME: the clock in the telemetry is the truth, and time moves only by what your reply really covers. Always end with a time command giving how long the narrated moment took in the world, as precisely as you can, in seconds or minutes: a line or two of talk +20s to +1m; a short exchange +2m to +5m; a longer conversation or a small task +10m to +30m; a meal +20m to +45m. Walking somewhere inside a station is the area command, which adds its own time. Never cover more than an hour in one reply: longer stretches (working through a shift, waiting, travelling, sleeping) happen only when the player asks for them, and the game tells you when it does. Never mention the block in the narration.]');
     } else if (instructions && cfg.tracker) {
         L.push('[SHIP-OS RULES. The game tracks the numbers above by itself, so never print stat blocks. '
             + 'FIGHTS: when violence breaks out, do NOT narrate the fight. Stop at the instant it begins; the game resolves the fight and gives you the result to narrate afterwards. '
-            + 'TIME: never skip ahead hours or days on your own.]');
+            + 'TIME: time moves only by what your reply really covers, usually seconds or minutes; longer stretches happen only when the player asks for them, and the game tells you when it does.]');
     }
     return L.join('\n');
 }
@@ -144,13 +148,17 @@ function processMessage(mesId) {
         cur.lastCheck = null;
         commit('consumed');
     }
+    // A stretch the player asked for has already been put on the clock; this reply narrates it.
+    const granted = !!cur.timeGrant;
+    cur.timeGrant = null;
+    setAiTimeBudget(granted ? 15 : 60);
     TAG_RE.lastIndex = 0;
     const hasTags = cfg.aiCommands && TAG_RE.test(msg.mes);
     // Every reply takes some story time. If the AI did not say how much, assume a short beat.
     // When the tracker pass is on, it reads the reply and decides, so the default waits for it.
-    const timed = hasTags && /(^|[\n;>])\s*time\b/i.test(msg.mes);
+    const timed = (hasTags && /(^|[\n;>])\s*time\b/i.test(msg.mes)) || granted;
     const deferTime = replyHooks.length > 0 && cfg.tracker;
-    if (!timed && !deferTime) autoTime();
+    if (!timed && !deferTime) autoTime(msg.mes);
     if (!hasTags) { runReplyHooks(mesId, msg, timed); return; }
 
     const applied = [];
@@ -184,13 +192,49 @@ function runReplyHooks(mesId, msg, timed) {
     }
 }
 
-/** Adds the default "a reply takes a few minutes" beat. */
-export function autoTime() {
+/**
+ * Times a reply that did not say how long it took: from its text (a few lines of talk are
+ * seconds, a long scene a few minutes), or a fixed beat if the player set one.
+ */
+export function autoTime(text = '') {
     const cfg = settings();
     const cur = S();
-    if (!cur || !(cfg.autoMinutes > 0) || cur.combat || cur.dead) return;
-    advanceTime(Number(cfg.autoMinutes));
+    if (!cur || cur.combat || cur.dead) return;
+    passMinutes(Number(cfg.autoMinutes) > 0 ? Number(cfg.autoMinutes) : estimateMinutes(text));
     commit('auto-time');
+}
+
+/**
+ * The player's own message. If it carries a request for time to pass (picked from the chat bar
+ * or typed as [+2h] at the end), the game decides how much really passes before the reply.
+ */
+function processUserMessage(mesId) {
+    const cfg = settings();
+    const cur = S();
+    if (!cfg.enabled || !cur) return;
+    const c = ctx();
+    const msg = c.chat?.[mesId];
+    if (!msg || !msg.is_user || typeof msg.mes !== 'string') return;
+    let ask = pendingAsk();
+    setPendingAsk(null);
+    const typed = takeTypedAsk(msg.mes);
+    if (typed) { ask = typed.mins; msg.mes = typed.text; }
+    if (!ask) return;
+    snapshot(mesId);
+    let line;
+    try {
+        const g = passTime(ask, { what: msg.mes });
+        line = grantLine(g);
+        if (g.granted < g.asked) toast('info', line);
+    } catch (e) {
+        line = `⌛ no time passed: ${e.message}`;
+        toast('warning', line);
+    }
+    msg.extra ??= {};
+    msg.extra.scifi_os = { applied: [line], failed: [] };
+    if (Array.isArray(msg.swipes) && msg.swipe_id !== undefined) msg.swipes[msg.swipe_id] = msg.mes;
+    commit('time-ask');
+    refreshPrompt();
 }
 
 /** Adds a small "telemetry updated" chip under a message that changed the state. */
@@ -217,6 +261,8 @@ function decorateAll() {
 
 export function initAiLink() {
     on('MESSAGE_RECEIVED', (id) => { processMessage(Number(id)); refreshPrompt(); });
+    on('MESSAGE_SENT', (id) => processUserMessage(Number(id)));
+    on('USER_MESSAGE_RENDERED', (id) => { const n = Number(id); const m = ctx().chat?.[n]; if (m?.extra?.scifi_os) { try { ctx().updateMessageBlock?.(n, m); } catch { /* */ } decorateMessage(n); } });
     on('CHARACTER_MESSAGE_RENDERED', (id) => decorateMessage(Number(id)));
     on('MESSAGE_SWIPED', (id) => { if (rollbackTo(Number(id))) addLog('Timeline reverted (message swiped).', 'sys'); refreshPrompt(); });
     on('MESSAGE_DELETED', (count) => { rollbackTo(Number(count)); refreshPrompt(); });

@@ -43,6 +43,9 @@ export function onTick(fn) { tickHooks.push(fn); }
 // get to mint money, so a few commands are limited when they come from it.
 let aiMode = false;
 export const isAiCommand = () => aiMode;
+// How much story time the storyteller may still add in the reply being processed.
+let aiTimeBudget = Infinity;
+export function setAiTimeBudget(mins) { aiTimeBudget = Math.max(0, mins); }
 const AI_CREDIT_CAP = 2000;
 const AI_REWARD_CAP = 20000;
 
@@ -96,6 +99,25 @@ export function advanceTime(minutes, { asleep = false } = {}) {
     }
 }
 
+/**
+ * Moves the clock by a possibly fractional number of minutes. Seconds are carried over until
+ * they add up to a whole minute, so a run of short exchanges still moves time, honestly.
+ */
+export function passMinutes(mins, opts) {
+    const st = S();
+    if (!st || !Number.isFinite(mins) || mins <= 0) return;
+    const total = (st.timeCarry ?? 0) + mins;
+    const whole = Math.floor(total);
+    st.timeCarry = Math.round((total - whole) * 1000) / 1000;
+    if (whole > 0) advanceTime(whole, opts);
+}
+
+/** "40 s", "3 min", "1 h 20 min". */
+export function fmtShort(mins) {
+    if (mins < 1) return `${Math.max(1, Math.round(mins * 60))} s`;
+    return fmtDuration(mins);
+}
+
 /** Starts a journey to another system. The trip is lived in story time; nothing is skipped. */
 export function beginTransit(toId, hours, info = {}) {
     const st = S();
@@ -140,9 +162,9 @@ export function parseDuration(text) {
     const s = String(text).trim().toLowerCase();
     const sign = s.startsWith('-') ? -1 : 1;
     let total = 0, matched = false;
-    for (const m of s.matchAll(/(\d+(?:\.\d+)?)\s*(d|h|m)/g)) {
+    for (const m of s.matchAll(/(\d+(?:\.\d+)?)\s*(d|h|m|s)/g)) {
         matched = true;
-        total += Number(m[1]) * { d: 1440, h: 60, m: 1 }[m[2]];
+        total += Number(m[1]) * { d: 1440, h: 60, m: 1, s: 1 / 60 }[m[2]];
     }
     if (!matched) {
         const n = Number(s.replace(/^[+-]/, ''));
@@ -368,11 +390,16 @@ const COMMANDS = {
     time(st, [v]) {
         let mins = parseDuration(v);
         if (!Number.isFinite(mins)) throw new Error(`"${v}" is not a duration`);
-        // The storyteller cannot wind the clock back, and cannot jump over a shift, a lesson
-        // or a day's forced labour: those are lived two hours at a time at most.
-        if (aiMode) mins = clamp(mins, 0, st.activity?.on ? 120 : 24 * 60);
-        advanceTime(mins);
-        return `Time ${mins >= 0 ? '+' : ''}${Math.round(mins / 6) / 10}h`;
+        let note = '';
+        if (aiMode) {
+            // The storyteller reports how long its scene took. It cannot wind the clock back, and
+            // it cannot jump ahead on its own: long stretches are asked for by the player.
+            if (mins < 0) throw new Error('time does not run backwards');
+            if (mins > aiTimeBudget) { mins = aiTimeBudget; note = ' (capped: longer stretches are the player\'s call)'; }
+            aiTimeBudget -= mins;
+        }
+        passMinutes(mins);
+        return `Time +${fmtShort(mins)}${note}`;
     },
     need(st, [name, v]) {
         const n = findByName(NEEDS, name) ?? NEEDS.find(x => x.id.startsWith(norm(name)));

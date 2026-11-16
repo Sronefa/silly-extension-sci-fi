@@ -69,7 +69,7 @@ export function initSettings() {
             <h4>Simulation</h4>
             ${check('needsDecay', 'Needs drain as time passes')}
             <label>Needs drain speed <input type="range" min="0.25" max="3" step="0.25" data-sfs="needsRate"> <span id="sf-rate-val"></span></label>
-            <label title="Story time added for an AI reply that does not say how long it took">Minutes per AI reply <input type="number" class="text_pole" min="0" max="120" data-sfs="autoMinutes"></label>
+            <label title="Story time added for an AI reply that does not say how long it took. 0 times it from its text: a few lines of talk are seconds, a long scene a few minutes.">Fixed minutes per untimed AI reply (0 = judge from the text) <input type="number" class="text_pole" min="0" max="120" data-sfs="autoMinutes"></label>
             ${check('combatSpeech', 'AI-written shouts during fights (extra AI calls)', 'A few short side calls per fight so enemies and allies say things in character')}
             <h4>AI link</h4>
             ${check('inject', 'Send character and ship telemetry to the AI')}
