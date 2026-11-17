@@ -3,7 +3,7 @@
 //  - the player can ask for a longer stretch to pass from the chat bar, writing what the
 //    character does meanwhile. The game grants it, shortens it or refuses it, and stops early
 //    when something happens that the character would notice.
-import { S, addLog } from '../core/state.js';
+import { S, addLog, adjust } from '../core/state.js';
 import { advanceTime, passMinutes, fmtDuration, fmtShort, parseDuration, needStatuses } from './sim.js';
 import { isBleeding } from './body.js';
 import { present, walkTime, areaOf } from './activity.js';
@@ -38,17 +38,31 @@ export function estimateMinutes(text) {
 
 // A stretch picked from the chat bar, waiting for the message it goes with.
 let pending = null;
+let pendingSleep = false;
 export const pendingAsk = () => pending;
-export function setPendingAsk(mins) { pending = Number.isFinite(mins) && mins > 0 ? mins : null; }
+export const pendingAsleep = () => !!pending && pendingSleep;
+export function setPendingAsk(mins, { asleep = false } = {}) {
+    pending = Number.isFinite(mins) && mins > 0 ? mins : null;
+    pendingSleep = !!pending && asleep;
+}
 
-/** A request typed at the end of a message: [+2h], [wait 30m], [until 07:00]. */
-const ASK_RE = /\s*\[(?:\+|wait\s+|pass\s+|⌛\s*)?((?:until\s+)?[\d:hms .]+)\]\s*$/i;
+/** A request typed at the end of a message: [+2h], [wait 30m], [until 07:00], [sleep 8h]. */
+const ASK_RE = /\s*\[(?:\+|wait\s+|pass\s+|(sleep|nap)\s+|⌛\s*)?((?:until\s+)?[\d:hms .]+)\]\s*$/i;
 export function takeTypedAsk(text) {
     const m = String(text ?? '').match(ASK_RE);
-    if (!m || !/[hms:]/i.test(m[1])) return null;
-    const mins = parseAsk(m[1].trim());
+    if (!m || !/[hms:]/i.test(m[2])) return null;
+    const mins = parseAsk(m[2].trim());
     if (!Number.isFinite(mins)) return null;
-    return { mins, text: String(text).replace(ASK_RE, '').trimEnd() };
+    return { mins, asleep: !!m[1], text: String(text).replace(ASK_RE, '').trimEnd() };
+}
+
+/** Why the character cannot lie down and sleep where they are, or ''. */
+export function noBed(st = S()) {
+    if (!st) return 'no campaign';
+    if (st.activity?.on) return `you are in the middle of something: ${st.activity.name.toLowerCase()}`;
+    if (st.custody || st.transit || st.ship || st.post) return '';
+    if (st.loc.docked) return 'you have no bunk of your own here: rent a capsule or a room in the habitat ring';
+    return '';
 }
 
 /** Turns what the player wrote into minutes: "2h", "30m", "1h30", "until 07:00". */
@@ -67,21 +81,23 @@ export function parseAsk(text, st = S()) {
 }
 
 /** Why a stretch of time cannot even begin, or ''. */
-export function refusal(st = S()) {
+export function refusal(st = S(), { asleep = false } = {}) {
     if (!st) return 'no campaign';
     if (st.dead) return 'the character is dead';
     if (st.combat || st.shipCombat) return 'not in the middle of a fight';
     if (isBleeding(st.captain)) return 'you are bleeding: deal with it first';
-    const low = lowNeed(st);
+    if (asleep) { const bed = noBed(st); if (bed) return bed; }
+    const low = lowNeed(st, { asleep });
     if (low) return `you are too ${low} to let time slip by: see to it first`;
     return '';
 }
 
-function lowNeed(st) {
+// Exhaustion stops a waking stretch, but it is exactly what sleep is for.
+function lowNeed(st, { asleep = false } = {}) {
     const n = st.captain.needs ?? {};
     if (n.hydration !== undefined && n.hydration < LOW) return 'thirsty';
     if (n.nourishment !== undefined && n.nourishment < LOW) return 'hungry';
-    if (n.rest !== undefined && n.rest < LOW) return 'exhausted';
+    if (!asleep && n.rest !== undefined && n.rest < LOW) return 'exhausted';
     return '';
 }
 
@@ -100,9 +116,9 @@ export function suggestions(st = S()) {
  * Lets up to `asked` minutes pass, in short steps, stopping as soon as something happens.
  * Returns { asked, granted, why, from, to } or throws when it cannot start at all.
  */
-export function passTime(asked, { what = '' } = {}) {
+export function passTime(asked, { what = '', asleep = false } = {}) {
     const st = S();
-    const no = refusal(st);
+    const no = refusal(st, { asleep });
     if (no) throw new Error(no);
     if (!Number.isFinite(asked) || asked <= 0) throw new Error('say how long: 30m, 2h, until 07:00');
     let why = '';
@@ -122,9 +138,10 @@ export function passTime(asked, { what = '' } = {}) {
         let step = Math.min(STEP, left);
         if (a && !a.on) step = Math.min(step, a.by - st.minutes - margin(st, a));
         if (step <= 0) { why = `it is time to go: ${a.name.toLowerCase()} is due to start`; break; }
-        advanceTime(step);
+        advanceTime(step, { asleep });
         left -= step;
         if (st.dead) { why = 'the character died'; break; }
+        if (asleep && st.captain.needs.rest >= 100) { why = 'they woke up rested'; break; }
         if (a?.on && st.activity !== a) { why = `${a.name.toLowerCase()} is over`; break; }
         if (st.pendingEvent && st.pendingEvent !== ev0) { why = 'something came up'; break; }
         if ((st.custody?.type ?? null) !== cust0) { why = 'everything changed'; break; }
@@ -132,20 +149,22 @@ export function passTime(asked, { what = '' } = {}) {
         if (cruise0 && !st.cruise) { why = 'you have arrived'; break; }
         if (st.combat || st.shipCombat) { why = 'a fight broke out'; break; }
         if (isBleeding(st.captain)) { why = 'you are bleeding'; break; }
-        const low = lowNeed(st);
-        if (low) { why = `you are too ${low} to carry on`; break; }
+        const low = lowNeed(st, { asleep });
+        if (low) { why = asleep ? `they woke up ${low}` : `you are too ${low} to carry on`; break; }
     }
     const granted = st.minutes - from;
-    st.timeGrant = { asked: Math.round(asked), granted, why, from, to: st.minutes, what: String(what).slice(0, 300) };
-    addLog(granted < asked ? `Let ${fmtDuration(granted)} pass of the ${fmtDuration(asked)} asked: ${why}.` : `Let ${fmtDuration(granted)} pass.`, 'sys');
+    if (asleep && granted > 0) adjust(st.captain, 'stress', -granted / 30, 0, 100);
+    st.timeGrant = { asked: Math.round(asked), granted, why, from, to: st.minutes, what: String(what).slice(0, 300), asleep };
+    addLog(granted < asked ? `${asleep ? 'Slept' : 'Let pass'} ${fmtDuration(granted)} of the ${fmtDuration(asked)} asked: ${why}.` : `${asleep ? 'Slept' : 'Let pass'} ${fmtDuration(granted)}.`, 'sys');
     return st.timeGrant;
 }
 
 /** One line for the chat, under the player's message. */
 export function grantLine(g) {
     if (!g) return '';
-    if (g.granted >= g.asked) return `⌛ ${fmtDuration(g.granted)} passed`;
-    return `⌛ ${fmtDuration(g.granted)} of ${fmtDuration(g.asked)} passed: ${g.why}`;
+    const verb = g.asleep ? 'slept' : 'passed';
+    if (g.granted >= g.asked) return `⌛ ${fmtDuration(g.granted)} ${verb}`;
+    return `⌛ ${fmtDuration(g.granted)} of ${fmtDuration(g.asked)} ${verb}: ${g.why}`;
 }
 
 /** What the storyteller is told about a stretch the player asked for. Consumed by the next reply. */
@@ -153,7 +172,7 @@ export function grantPrompt(st) {
     const g = st.timeGrant;
     if (!g) return '';
     const cut = g.granted < g.asked ? ` The game stopped it after ${fmtDuration(g.granted)} of the ${fmtDuration(g.asked)} asked, because ${g.why}.` : '';
-    return `TIME PASSED AT THE PLAYER'S REQUEST: ${fmtDuration(g.granted)} have gone by since the player's last message, and the clock already shows the end of it.${cut} Narrate that stretch briefly, as what the character did (their message says what they meant to do) and what changed around them, and arrive at the present moment. Do not add a time command for this stretch; add one only for anything after it, a few minutes at most.${needStatuses(st).length ? ` By now the character is: ${needStatuses(st).join(', ')}.` : ''}`;
+    return `TIME PASSED AT THE PLAYER'S REQUEST: ${fmtDuration(g.granted)} have gone by since the player's last message${g.asleep ? `, and ${st.captain.name} spent them asleep` : ''}, and the clock already shows the end of it.${cut} Narrate that stretch briefly, as what the character did (their message says what they meant to do) and what changed around them, and arrive at the present moment. Do not add a time command for this stretch; add one only for anything after it, a few minutes at most.${needStatuses(st).length ? ` By now the character is: ${needStatuses(st).join(', ')}.` : ''}`;
 }
 
 export { fmtShort, passMinutes };

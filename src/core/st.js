@@ -44,7 +44,24 @@ export const DEFAULT_SETTINGS = {
     tracker: false,
     loreAgent: false,
     loreEvery: 6,
+    // Panel actions write a line into the chat box and happen when the message is sent.
+    chatActions: true,
+    actionStars: true,
+    // Reading actions from the player's own words: auto, jev, side, text or off.
+    hearMode: 'auto',
+    jevKey: '',
+    jevModel: 'jev-latest',
+    jevRoute: 'auto',
+    jevUrl: '',
+    jevTimeout: 6,
+    hearSure: 0.85,
+    hearAsk: 0.5,
+    // Game master mode: hand edits, free time, the command console. Off in normal play.
+    gmMode: false,
 };
+
+/** True when game master mode is on: numbers can be edited by hand and any command run. */
+export const gmOn = () => !!settings().gmMode;
 
 export function settings() {
     const c = ctx();

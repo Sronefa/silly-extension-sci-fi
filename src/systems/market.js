@@ -148,6 +148,8 @@ export function vendorMod(st, key) {
     return v.mod;
 }
 
+const MIN_SPREAD = 0.02;
+
 function spread(st, sysId) {
     const sys = getGalaxy(st.seed).systems[sysId];
     return Math.max(0.02, BROKER_MARGIN + (TAX[sys.faction] ?? 0.02) - 0.004 * skillOf(st.captain, 'negotiation'));
@@ -157,10 +159,10 @@ function prices(st, key, mid) {
     const [sysId] = parseKey(key);
     const m = spread(st, sysId);
     const v = vendorMod(st, key);
-    return {
-        buy: mid * (1 + m) * (1 + v),
-        sell: mid * (1 - m) * (v > 0 ? 1 / (1 + v) : 1 - v / 2),
-    };
+    const buy = mid * (1 + m) * (1 + v);
+    // However good the deal, a broker never buys back for more than they sell: that would be
+    // a money machine (buy, sell, repeat) at a single counter.
+    return { buy, sell: Math.min(mid * (1 - m) * (v > 0 ? 1 / (1 + v) : 1 - v / 2), buy * (1 - MIN_SPREAD)) };
 }
 
 /** One row per good the station trades, as it stands at time t. */

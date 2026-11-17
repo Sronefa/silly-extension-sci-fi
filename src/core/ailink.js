@@ -2,9 +2,12 @@
 // and hidden <sf>…</sf> update tags parsed out of AI replies.
 import { ctx, settings, MODULE, on } from './st.js';
 import { S, commit, snapshot, rollbackTo, fmtDate, locationLabel, cargoUsed, cargoCap, shipClass, currentSystem, galaxy, addLog } from './state.js';
-import { runBlock, needStatuses, transitInfo, fmtDuration, advanceTime, setAiTimeBudget, passMinutes } from '../systems/sim.js';
-import { estimateMinutes, grantPrompt, grantLine, passTime, pendingAsk, setPendingAsk, takeTypedAsk } from '../systems/clock.js';
+import { runBlock, needStatuses, transitInfo, fmtDuration, advanceTime, setAiTimeBudget, passMinutes, aiTimeLeft, aiCreditsLeft } from '../systems/sim.js';
+import { estimateMinutes, grantPrompt, grantLine, passTime, pendingAsk, pendingAsleep, setPendingAsk, takeTypedAsk } from '../systems/clock.js';
 import { toast } from './st.js';
+import { takeQueue, runIntent, cutLine, intentPrompt, setBarNote } from './intents.js';
+import { hear } from './hear.js';
+import { confirmAsk } from '../ui/hud.js';
 import { fmtInt } from './util.js';
 import { NEEDS, SHIP_SYSTEMS, FACTIONS, SHIP_WEAPONS, PERSONAL_WEAPONS, ARMORS } from '../data/catalog.js';
 import { ATTRIBUTES, SKILL_DEFS, TRAITS, FLAWS, CYBERWARE, CRAFT_CLASSES } from '../data/chargen.js';
@@ -170,6 +173,8 @@ export function buildNow(st = S(), sec = st && sections(st), nudge = true) {
     L.push(...sec.now);
     if (st.lastCheck) L.push(`SKILL CHECK, narrate this outcome and do not change it: ${st.lastCheck.text}`);
     if (st.pendingEvent) L.push(`EVENT TO NARRATE NOW: ${st.pendingEvent}`);
+    const acts = intentPrompt(st);
+    if (acts) L.push(acts);
     const grant = grantPrompt(st);
     if (grant) L.push(grant);
     else if (nudge && settings().aiCommands) L.push('End your reply with the <sf> block, including how long it took.');
@@ -262,29 +267,39 @@ function registerMacros() {
         ['shipos', () => (live() ? buildTelemetry() : ''), 'Ship-OS: rules, state and now together'],
     ];
     for (const [key, fn, desc] of defs) {
-        try { c.registerMacro?.(key, fn, desc); } catch (e) { console.warn('[Ship-OS] macro not registered', key, e); }
+        try {
+            // Current SillyTavern has a macro registry; older builds and ports only have registerMacro.
+            if (c.macros?.register) c.macros.register(key, { handler: () => fn(), description: desc });
+            else c.registerMacro?.(key, fn, desc);
+        } catch (e) { console.warn('[Ship-OS] macro not registered', key, e); }
     }
 }
 
-function processMessage(mesId) {
+function processMessage(mesId, type = '') {
     const cfg = settings();
     if (!cfg.enabled || !S()) return;
     const c = ctx();
     const msg = c.chat?.[mesId];
     if (!msg || msg.is_user || msg.is_system || typeof msg.mes !== 'string') return;
+    // "Continue" lengthens a reply that was already processed: only the new text counts, the
+    // snapshot from before the reply stays (so a swipe still undoes all of it), and what the
+    // reply may still add in time and money carries on from where it stopped.
+    const prev = type === 'continue' ? msg.extra?.scifi_os : null;
+    if (prev && Number.isFinite(prev.len)) return processContinue(mesId, msg, prev);
     // Snapshot first, so a swipe or delete restores everything this reply consumed or changed.
     snapshot(mesId);
     // Any AI reply has narrated whatever event or check was queued, so they are consumed.
     const cur = S();
-    if (cur.pendingEvent || cur.lastCheck) {
+    if (cur.pendingEvent || cur.lastCheck || cur.lastActs) {
         cur.pendingEvent = null;
         cur.lastCheck = null;
+        cur.lastActs = null;
         commit('consumed');
     }
     // A stretch the player asked for has already been put on the clock; this reply narrates it.
     const granted = !!cur.timeGrant;
     cur.timeGrant = null;
-    setAiTimeBudget(granted ? 15 : 60);
+    setAiTimeBudget(granted ? 15 : 60, { credits: AI_REPLY_CREDITS });
     TAG_RE.lastIndex = 0;
     const hasTags = cfg.aiCommands && TAG_RE.test(msg.mes);
     // Every reply takes some story time. If the AI did not say how much, assume a short beat.
@@ -292,21 +307,12 @@ function processMessage(mesId) {
     const timed = (hasTags && /(^|[\n;>])\s*time\b/i.test(msg.mes)) || granted;
     const deferTime = replyHooks.length > 0 && cfg.tracker;
     if (!timed && !deferTime) autoTime(msg.mes);
-    if (!hasTags) { runReplyHooks(mesId, msg, timed); return; }
+    if (!hasTags) { remember(msg, [], [], timed); runReplyHooks(mesId, msg, timed); return; }
 
     const applied = [];
     const failed = [];
-    TAG_RE.lastIndex = 0;
-    msg.mes = msg.mes.replace(TAG_RE, (_, a, b) => {
-        for (const r of runBlock(a ?? b ?? '', { ai: true })) {
-            if (!r.text) continue;
-            (r.ok ? applied : failed).push(r.text);
-        }
-        return '';
-    }).trimEnd();
-
-    msg.extra ??= {};
-    msg.extra.scifi_os = { applied, failed };
+    msg.mes = applyTags(msg.mes, applied, failed);
+    remember(msg, applied, failed, timed);
     if (Array.isArray(msg.swipes) && msg.swipe_id !== undefined) msg.swipes[msg.swipe_id] = msg.mes;
     if (failed.length) console.warn('[Ship-OS] ignored AI commands:', failed);
     commit('ai');
@@ -314,6 +320,48 @@ function processMessage(mesId) {
     try { c.updateMessageBlock?.(mesId, msg); } catch { /* not rendered yet */ }
     c.saveChat?.();
     runReplyHooks(mesId, msg, timed);
+}
+
+// The most the story may hand over in one reply, however many credit commands it writes.
+const AI_REPLY_CREDITS = 2000;
+
+/** Runs the hidden command blocks in a reply and returns the reply without them. */
+function applyTags(text, applied, failed) {
+    TAG_RE.lastIndex = 0;
+    return text.replace(TAG_RE, (_, a, b) => {
+        for (const r of runBlock(a ?? b ?? '', { ai: true })) {
+            if (!r.text) continue;
+            (r.ok ? applied : failed).push(r.text);
+        }
+        return '';
+    }).trimEnd();
+}
+
+/** What a reply did, kept on the message: the chips under it, and where a "continue" picks up. */
+function remember(msg, applied, failed, timed) {
+    msg.extra ??= {};
+    msg.extra.scifi_os = { applied, failed, len: msg.mes.length, timed: !!timed, timeLeft: aiTimeLeft(), creditsLeft: aiCreditsLeft() };
+}
+
+function processContinue(mesId, msg, prev) {
+    const cfg = settings();
+    const c = ctx();
+    setAiTimeBudget(prev.timeLeft ?? 60, { credits: prev.creditsLeft ?? AI_REPLY_CREDITS });
+    const head = msg.mes.slice(0, prev.len);
+    let tail = msg.mes.slice(prev.len);
+    TAG_RE.lastIndex = 0;
+    const hasTags = cfg.aiCommands && TAG_RE.test(tail);
+    const timed = prev.timed || (hasTags && /(^|[\n;>])\s*time\b/i.test(tail));
+    if (!timed && !(replyHooks.length > 0 && cfg.tracker)) autoTime(tail);
+    const applied = [...(prev.applied ?? [])];
+    const failed = [...(prev.failed ?? [])];
+    if (hasTags) tail = applyTags(tail, applied, failed);
+    msg.mes = (head + tail).trimEnd();
+    remember(msg, applied, failed, timed);
+    if (Array.isArray(msg.swipes) && msg.swipe_id !== undefined) msg.swipes[msg.swipe_id] = msg.mes;
+    commit('ai');
+    try { c.updateMessageBlock?.(mesId, msg); } catch { /* not rendered yet */ }
+    if (hasTags) c.saveChat?.();
 }
 
 const replyHooks = [];
@@ -338,10 +386,11 @@ export function autoTime(text = '') {
 }
 
 /**
- * The player's own message. If it carries a request for time to pass (picked from the chat bar
- * or typed as [+2h] at the end), the game decides how much really passes before the reply.
+ * The player's own message. It may carry actions queued from the panel, and a request for time
+ * to pass (picked from the chat bar or typed as [+2h] at the end). The engine carries them out
+ * before the reply, so the storyteller narrates what really happened.
  */
-function processUserMessage(mesId) {
+async function processUserMessage(mesId) {
     const cfg = settings();
     const cur = S();
     if (!cfg.enabled || !cur) return;
@@ -349,37 +398,182 @@ function processUserMessage(mesId) {
     const msg = c.chat?.[mesId];
     if (!msg || !msg.is_user || typeof msg.mes !== 'string') return;
     let ask = pendingAsk();
+    let asleep = pendingAsleep();
     setPendingAsk(null);
     const typed = takeTypedAsk(msg.mes);
-    if (typed) { ask = typed.mins; msg.mes = typed.text; }
-    if (!ask) return;
-    snapshot(mesId);
-    let line;
-    try {
-        const g = passTime(ask, { what: msg.mes });
-        line = grantLine(g);
-        if (g.granted < g.asked) toast('info', line);
-    } catch (e) {
-        line = `⌛ no time passed: ${e.message}`;
-        toast('warning', line);
+    if (typed) { ask = typed.mins; asleep = typed.asleep; msg.mes = typed.text; }
+    const acts = takeQueue();
+    // What the player wrote in their own words is read for actions too. The lines the panel
+    // wrote are left out, so a button's action is not heard a second time.
+    let heard = { acts: [], suggest: [] };
+    const own = acts.reduce((t, a) => cutLine(t, a.line), msg.mes);
+    if (own.trim()) {
+        setBarNote('Reading your message…');
+        try { heard = await hear(own, { skip: acts.map(a => a.name), skipIds: ask ? ['sleep', 'relax'] : [] }); } catch (e) { console.warn('[Ship-OS] hearing failed', e); }
+        setBarNote('');
+        if (heard.error) toast('warning', `Could not read your actions with ${heard.via === 'jev' ? 'Jev' : 'the background model'} (${heard.error}). Only obvious ones are suggested.`);
+        // The chat may have been switched while the reader was busy.
+        if (ctx().chat?.[mesId] !== msg || !S()) return;
     }
+    acts.push(...heard.acts);
+    if (!ask && !acts.length && !heard.suggest.length) return;
     msg.extra ??= {};
-    msg.extra.scifi_os = { applied: [line], failed: [] };
+    msg.extra.scifi_os = { applied: [], failed: [], acts, suggest: heard.suggest, ask: ask || 0, asleep: !!asleep };
+    applyUserMessage(mesId, msg);
     if (Array.isArray(msg.swipes) && msg.swipe_id !== undefined) msg.swipes[msg.swipe_id] = msg.mes;
-    commit('time-ask');
     refreshPrompt();
 }
 
-/** Adds a small "telemetry updated" chip under a message that changed the state. */
+/** Carries out what a sent message asked for. Run again, from its snapshot, when one is undone. */
+function applyUserMessage(mesId, msg) {
+    const x = msg.extra.scifi_os;
+    snapshot(mesId);
+    const cur = S();
+    for (const a of x.acts ?? []) {
+        try { a.text = runIntent(a); a.ok = true; } catch (e) { a.ok = false; a.text = String(e.message ?? e); }
+    }
+    cur.lastActs = (x.acts ?? []).length ? x.acts.map(a => ({ ok: a.ok, text: a.text, line: a.line || a.label })) : null;
+    const bad = (x.acts ?? []).filter(a => !a.ok);
+    if (bad.length) toast('warning', bad.map(a => `${a.label}: ${a.text}`).join(' · '));
+    x.applied = [];
+    if (x.ask) {
+        let line;
+        try {
+            const g = passTime(x.ask, { what: msg.mes, asleep: x.asleep });
+            line = grantLine(g);
+            if (g.granted < g.asked) toast('info', line);
+        } catch (e) {
+            line = `⌛ no time passed: ${e.message}`;
+            toast('warning', line);
+        }
+        x.applied.push(line);
+    }
+    commit('time-ask');
+}
+
+/**
+ * Changes what the player's latest message did (takes an action back, or confirms one the game
+ * was unsure of). The state goes back to just before the message, the reply that narrated it is
+ * removed, the message is carried out again with the change, and the storyteller answers afresh.
+ */
+async function redoMessage(mesId, change, { title, removes = 'The reply after this message is removed too, and the storyteller answers again.' }) {
+    const c = ctx();
+    const msg = c.chat?.[mesId];
+    const x = msg?.extra?.scifi_os;
+    if (!x) return;
+    const later = c.chat.slice(mesId + 1);
+    if (later.some(m => m.is_user && !m.is_system)) { toast('info', 'Only your latest message can be changed.'); return; }
+    const replies = later.length;
+    if (replies && !(await confirmAsk(title, removes))) return;
+    for (let i = 0; i < replies; i++) {
+        if (typeof c.deleteLastMessage === 'function') await c.deleteLastMessage();
+        else { await c.executeSlashCommandsWithOptions?.(`/cut ${c.chat.length - 1}`); }
+    }
+    if (c.chat.length !== mesId + 1) { toast('error', 'Could not remove the reply. Delete it by hand, then try again.'); return; }
+    rollbackTo(mesId);
+    change(x, msg);
+    if (Array.isArray(msg.swipes) && msg.swipe_id !== undefined) msg.swipes[msg.swipe_id] = msg.mes;
+    if (!msg.mes.trim() && !x.acts.length && !x.ask) {
+        // Nothing left of the message: it goes as well.
+        if (typeof c.deleteLastMessage === 'function') await c.deleteLastMessage();
+        commit('undo');
+        await c.saveChat?.();
+        refreshPrompt();
+        return;
+    }
+    applyUserMessage(mesId, msg);
+    try { c.updateMessageBlock?.(mesId, msg); } catch { /* not rendered */ }
+    decorateMessage(mesId);
+    await c.saveChat?.();
+    refreshPrompt();
+    if (replies) {
+        try { await c.executeSlashCommandsWithOptions?.('/trigger'); } catch { toast('info', 'Send to let the storyteller answer again.'); }
+    }
+}
+
+function undoAct(mesId, idx) {
+    const act = ctx().chat?.[mesId]?.extra?.scifi_os?.acts?.[idx];
+    if (!act) return Promise.resolve();
+    return redoMessage(mesId, (x, msg) => {
+        x.acts.splice(idx, 1);
+        msg.mes = cutLine(msg.mes, act.line);
+    }, { title: `Take back "${act.label}"?` });
+}
+
+/** The game was unsure what the player meant; they say yes, so it happens after all. */
+function confirmSuggest(mesId, idx) {
+    const sug = ctx().chat?.[mesId]?.extra?.scifi_os?.suggest?.[idx];
+    if (!sug) return Promise.resolve();
+    return redoMessage(mesId, (x) => {
+        x.suggest.splice(idx, 1);
+        x.acts.push({ ...sug, confirmed: true });
+    }, { title: `${sug.label}?`, removes: 'The reply after this message is written again with it.' });
+}
+
+/** No, that is not what the player meant: the suggestion goes away and nothing changes. */
+async function dropSuggest(mesId, idx) {
+    const c = ctx();
+    const x = c.chat?.[mesId]?.extra?.scifi_os;
+    if (!x?.suggest?.[idx]) return;
+    x.suggest.splice(idx, 1);
+    decorateMessage(mesId);
+    await c.saveChat?.();
+}
+
+/**
+ * Chips under a message: what the engine did with it. The actions of the player's latest message
+ * carry a × to take them back.
+ */
 export function decorateMessage(mesId) {
-    const info = ctx().chat?.[mesId]?.extra?.scifi_os;
+    const c = ctx();
+    const info = c.chat?.[mesId]?.extra?.scifi_os;
     const el = document.querySelector(`#chat .mes[mesid="${mesId}"] .mes_block`);
     if (!el) return;
     el.querySelector('.sf-chip-row')?.remove();
-    if (!info?.applied?.length) return;
+    const acts = info?.acts ?? [];
+    const sugg = info?.suggest ?? [];
+    if (!info?.applied?.length && !acts.length && !sugg.length) return;
+    const latest = !c.chat.slice(mesId + 1).some(m => m.is_user && !m.is_system);
     const row = document.createElement('div');
     row.className = 'sf-chip-row';
-    for (const text of info.applied) {
+    acts.forEach((a, i) => {
+        const chip = document.createElement('span');
+        chip.className = `sf-chip sf-chip-act${a.ok === false ? ' bad' : ''}${a.heard ? ' heard' : ''}`;
+        chip.textContent = a.ok === false ? `${a.label}: ${a.text}` : (a.text || a.label);
+        chip.title = a.heard ? `Read from your words${a.p ? ` (${Math.round(a.p * 100)}% sure)` : ''}` : (a.line ?? '');
+        if (latest && a.ok !== false) {
+            const x = document.createElement('button');
+            x.type = 'button';
+            x.className = 'sf-chip-x';
+            x.textContent = '×';
+            x.title = 'Take this action back';
+            x.addEventListener('click', (e) => { e.stopPropagation(); undoAct(mesId, i).catch(err => toast('error', err.message)); });
+            chip.appendChild(x);
+        }
+        row.appendChild(chip);
+    });
+    // Readings the game was not sure of: a tick makes them happen, a cross dismisses them.
+    if (latest) sugg.forEach((g, i) => {
+        const chip = document.createElement('span');
+        chip.className = 'sf-chip sf-chip-act sf-chip-ask';
+        chip.textContent = `${g.label}?`;
+        chip.title = `Did you mean this? Read from your words${g.p ? ` (${Math.round(g.p * 100)}% sure)` : ''}`;
+        const yes = document.createElement('button');
+        yes.type = 'button';
+        yes.className = 'sf-chip-x sf-chip-yes';
+        yes.textContent = '✓';
+        yes.title = 'Yes, do it';
+        yes.addEventListener('click', (e) => { e.stopPropagation(); confirmSuggest(mesId, i).catch(err => toast('error', err.message)); });
+        const no = document.createElement('button');
+        no.type = 'button';
+        no.className = 'sf-chip-x';
+        no.textContent = '×';
+        no.title = 'No, that is not what I meant';
+        no.addEventListener('click', (e) => { e.stopPropagation(); dropSuggest(mesId, i).catch(err => toast('error', err.message)); });
+        chip.append(yes, no);
+        row.appendChild(chip);
+    });
+    for (const text of info.applied ?? []) {
         const chip = document.createElement('span');
         chip.className = 'sf-chip';
         chip.textContent = text;
@@ -393,8 +587,8 @@ function decorateAll() {
 }
 
 export function initAiLink() {
-    on('MESSAGE_RECEIVED', (id) => { processMessage(Number(id)); refreshPrompt(); });
-    on('MESSAGE_SENT', (id) => processUserMessage(Number(id)));
+    on('MESSAGE_RECEIVED', (id, type) => { processMessage(Number(id), type); refreshPrompt(); });
+    on('MESSAGE_SENT', async (id) => { await processUserMessage(Number(id)); setTimeout(decorateAll, 50); });
     on('USER_MESSAGE_RENDERED', (id) => { const n = Number(id); const m = ctx().chat?.[n]; if (m?.extra?.scifi_os) { try { ctx().updateMessageBlock?.(n, m); } catch { /* */ } decorateMessage(n); } });
     on('CHARACTER_MESSAGE_RENDERED', (id) => decorateMessage(Number(id)));
     on('MESSAGE_SWIPED', (id) => { if (rollbackTo(Number(id))) addLog('Timeline reverted (message swiped).', 'sys'); refreshPrompt(); });

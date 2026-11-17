@@ -5,7 +5,7 @@ import { S, onChange } from '../core/state.js';
 import { settings, toast, on } from '../core/st.js';
 import { esc } from '../core/util.js';
 import { fmtDuration } from '../systems/sim.js';
-import { parseAsk, refusal, suggestions, setPendingAsk, pendingAsk, MAX_ASK } from '../systems/clock.js';
+import { parseAsk, refusal, suggestions, setPendingAsk, pendingAsk, pendingAsleep, noBed, MAX_ASK } from '../systems/clock.js';
 
 const PLAIN = [5, 15, 30, 60, 120, 240, 480];
 let btn, pop, chip;
@@ -18,37 +18,48 @@ function setChip() {
     const a = pendingAsk();
     if (!chip) return;
     chip.hidden = !a;
-    chip.textContent = a ? `⌛ ${fmtDuration(a)}` : '';
+    chip.textContent = a ? `${pendingAsleep() ? '☾' : '⌛'} ${fmtDuration(a)}` : '';
     btn?.classList.toggle('sf-time-armed', !!a);
 }
 
-function choose(mins) {
+function choose(mins, { asleep = false } = {}) {
     closePop();
     if (!Number.isFinite(mins) || mins <= 0) { toast('warning', 'Say how long: 30m, 2h, 1h30, or until 07:00'); return; }
     if (mins > MAX_ASK) { toast('warning', 'A day at most at a time'); return; }
-    setPendingAsk(mins);
+    setPendingAsk(mins, { asleep });
     setChip();
     const ta = textarea();
     if (!ta?.value.trim()) {
-        toast('info', `Now write what your character does during those ${fmtDuration(mins)}, and send.`);
+        toast('info', asleep ? `Now write where and how your character settles down to sleep, and send.` : `Now write what your character does during those ${fmtDuration(mins)}, and send.`);
         ta?.focus();
     }
+}
+
+/** Sleep is its own kind of stretch: rest comes back, and it ends early once rested. */
+function sleepRow(st) {
+    if (refusal(st, { asleep: true })) {
+        const why = noBed(st);
+        return why ? `<small class="sf-dim">Sleep: ${esc(why)}.</small>` : '';
+    }
+    return `<div class="sf-time-row"><span class="sf-dim">Sleep</span>${[120, 360, 480].map(m => `<button type="button" class="sf-btn" data-m="${m}" data-sleep="1">☾ ${esc(fmtDuration(m))}</button>`).join('')}</div>`;
 }
 
 function openPop() {
     if (pop) { closePop(); return; }
     const st = S();
     const no = refusal(st);
+    const sleep = st && !st.dead ? sleepRow(st) : '';
     pop = document.createElement('div');
     pop.id = 'sf-time-pop';
     pop.className = 'sf-time-pop';
     const sugg = no ? [] : suggestions(st);
     pop.innerHTML = no
-        ? `<div class="sf-time-head">Let time pass</div><div class="sf-warn-line">${esc(no.charAt(0).toUpperCase() + no.slice(1))}.</div>`
+        ? `<div class="sf-time-head">Let time pass</div><div class="sf-warn-line">${esc(no.charAt(0).toUpperCase() + no.slice(1))}.</div>${sleep}`
         : `<div class="sf-time-head">Let time pass</div>
         <small class="sf-dim">Write what your character does in that time and send it. The game decides how much really passes: it stops early if something happens.</small>
         ${sugg.length ? `<div class="sf-time-row">${sugg.map(x => `<button type="button" class="sf-btn primary" data-m="${x.mins}">${esc(x.label)}</button>`).join('')}</div>` : ''}
         <div class="sf-time-row">${PLAIN.map(m => `<button type="button" class="sf-btn" data-m="${m}">${esc(fmtDuration(m))}</button>`).join('')}</div>
+        ${sleep}
         <div class="sf-time-row"><input type="text" class="text_pole sf-time-in" placeholder="1h30, 45m, until 07:00"><button type="button" class="sf-btn" data-custom="1">Set</button></div>
         ${pendingAsk() ? '<div class="sf-time-row"><button type="button" class="sf-btn" data-m="0">Clear</button></div>' : ''}`;
     pop.addEventListener('click', (e) => {
@@ -57,7 +68,7 @@ function openPop() {
         if (b.dataset.custom) { choose(parseAsk(pop.querySelector('.sf-time-in').value, S())); return; }
         const m = Number(b.dataset.m);
         if (m === 0) { setPendingAsk(null); setChip(); closePop(); return; }
-        choose(m);
+        choose(m, { asleep: !!b.dataset.sleep });
     });
     pop.querySelector('.sf-time-in')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); choose(parseAsk(e.target.value, S())); } });
     document.body.appendChild(pop);
@@ -65,7 +76,9 @@ function openPop() {
     const w = Math.min(340, window.innerWidth - 16);
     pop.style.width = `${w}px`;
     pop.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w))}px`;
-    pop.style.bottom = `${Math.max(8, window.innerHeight - r.top + 6)}px`;
+    // Placed from the top: on phones the host puts a transform on <html>, which makes "bottom"
+    // count from the page box instead of the screen and pushed the panel off the top edge.
+    pop.style.top = `${Math.max(8, r.top - pop.offsetHeight - 6)}px`;
 }
 
 function sync() {

@@ -45,7 +45,15 @@ let aiMode = false;
 export const isAiCommand = () => aiMode;
 // How much story time the storyteller may still add in the reply being processed.
 let aiTimeBudget = Infinity;
-export function setAiTimeBudget(mins) { aiTimeBudget = Math.max(0, mins); }
+// What the storyteller may still hand out in the reply being processed. The cap is per reply,
+// not per command, so ten grants in one reply are worth no more than one.
+let aiCreditBudget = Infinity;
+export function setAiTimeBudget(mins, { credits } = {}) {
+    aiTimeBudget = Math.max(0, mins);
+    if (credits !== undefined) aiCreditBudget = Math.max(0, credits);
+}
+export const aiTimeLeft = () => aiTimeBudget;
+export const aiCreditsLeft = () => aiCreditBudget;
 const AI_CREDIT_CAP = 2000;
 const AI_REWARD_CAP = 20000;
 
@@ -212,6 +220,23 @@ function removeStack(list, name, qty) {
     return { it, taken };
 }
 
+/** Things the character cannot do in the middle of a shift, a lesson or a work detail. */
+function busy(st) {
+    if (st.activity?.on) throw new Error(`you are in the middle of something: ${st.activity.name.toLowerCase()}`);
+}
+
+/**
+ * Story time an everyday action takes. From the storyteller it counts against the reply's
+ * budget like a time command: a long sleep is the player's to ask for, not the reply's to skip.
+ */
+function aiMinutes(mins, what) {
+    if (!aiMode || !Number.isFinite(mins)) return mins;
+    if (aiTimeBudget <= 0) throw new Error(`no time left in this reply for ${what}: longer stretches are the player's call`);
+    const m = Math.min(mins, aiTimeBudget);
+    aiTimeBudget -= m;
+    return m;
+}
+
 /**
  * The command table. Each handler receives string arguments and returns a short
  * human-readable description of what changed.
@@ -221,9 +246,14 @@ const COMMANDS = {
         const d = aiMode ? parseDelta(v) : null;
         // Wages come from the game when the hours have been worked, and nobody in custody is handed money.
         if (d && (d.set ? d.v - st.captain.credits : d.v) > 0 && (st.activity?.kind === 'work' || st.custody)) throw new Error(st.custody ? 'a prisoner or a slave is not handed money by the story' : 'wages are paid by the game when the shift is done');
-        if (d && (d.set ? d.v - st.captain.credits : d.v) > AI_CREDIT_CAP) {
-            st.captain.credits += AI_CREDIT_CAP;
-            return `Credits +${AI_CREDIT_CAP} (capped: larger sums are paid through contracts and trade)`;
+        const gain = d ? (d.set ? d.v - st.captain.credits : d.v) : 0;
+        if (d && gain > 0) {
+            const cap = Math.min(AI_CREDIT_CAP, aiCreditBudget);
+            if (cap <= 0) throw new Error('the story has already handed out what it may this reply: larger sums are paid through contracts and trade');
+            const paid = Math.min(gain, cap);
+            aiCreditBudget -= paid;
+            st.captain.credits += paid;
+            return `Credits +${paid}${paid < gain ? ' (capped: larger sums are paid through contracts and trade)' : ''}`;
         }
         return `Credits ${applyDelta(st.captain, 'credits', v, -1e12, 1e12)}`;
     },
@@ -276,7 +306,7 @@ const COMMANDS = {
         else if (st.ship && st.ship.supplies >= 0.34) st.ship.supplies -= 0.34;
         else if (st.transit?.passenger) { /* meals are part of the fare */ }
         else throw new Error('nothing to eat: no rations and no ship stores');
-        advanceTime(15);
+        advanceTime(aiMinutes(15, 'a meal'));
         adjust(pc.needs, 'nourishment', 45, 0, 100);
         return `Ate a meal (${food ? food.name : st.transit?.passenger ? 'galley' : 'ship stores'})`;
     },
@@ -287,13 +317,14 @@ const COMMANDS = {
         else if (st.transit?.passenger || st.loc.docked) { /* taps on a station or transport */ }
         else if (water) { water.qty--; if (water.qty <= 0) pc.inventory.splice(pc.inventory.indexOf(water), 1); }
         else throw new Error('nothing to drink');
-        advanceTime(5);
+        advanceTime(aiMinutes(5, 'a drink'));
         adjust(pc.needs, 'hydration', 50, 0, 100);
         return 'Drank';
     },
     sleep(st, [v = '8h']) {
         if (st.combat) throw new Error('not during a fight');
-        const mins = clamp(parseDuration(v), 10, 12 * 60);
+        busy(st);
+        const mins = aiMinutes(clamp(parseDuration(v), 10, 12 * 60), 'sleep');
         if (!Number.isFinite(mins)) throw new Error(`"${v}" is not a duration`);
         advanceTime(mins, { asleep: true });
         adjust(st.captain, 'stress', -mins / 30, 0, 100);
@@ -301,14 +332,16 @@ const COMMANDS = {
     },
     wash(st) {
         if (!st.ship && !st.loc.docked && !st.transit) throw new Error('nowhere to wash here');
-        advanceTime(20);
+        busy(st);
+        advanceTime(aiMinutes(20, 'a wash'));
         adjust(st.captain.needs, 'hygiene', 85, 0, 100);
         adjust(st.captain.needs, 'morale', 3, 0, 100);
         return 'Washed';
     },
     relax(st, [v = '1h']) {
         if (st.combat) throw new Error('not during a fight');
-        const mins = clamp(parseDuration(v), 10, 6 * 60);
+        busy(st);
+        const mins = aiMinutes(clamp(parseDuration(v), 10, 6 * 60), 'unwinding');
         advanceTime(mins);
         adjust(st.captain, 'stress', -(mins / 60) * 12, 0, 100);
         adjust(st.captain.needs, 'morale', (mins / 60) * 6, 0, 100);
@@ -322,8 +355,7 @@ const COMMANDS = {
     craving(st, [v]) { return `Craving ${applyDelta(st.captain, 'craving', v, 0, 100)}`; },
     debt(st, [v]) {
         const d = aiMode ? parseDelta(v) : null;
-        // Wages come from the game when the hours have been worked, and nobody in custody is handed money.
-        if (d && (d.set ? d.v - st.captain.credits : d.v) > 0 && (st.activity?.kind === 'work' || st.custody)) throw new Error(st.custody ? 'a prisoner or a slave is not handed money by the story' : 'wages are paid by the game when the shift is done');
+        // The story can add to what is owed (a fine, a bribe on credit), but it never clears a debt.
         if (d && (d.set ? d.v < st.captain.debt : d.v < 0)) throw new Error('debt is only cleared by paying it');
         return `Debt ${applyDelta(st.captain, 'debt', v, 0, 1e12)}`;
     },
@@ -395,6 +427,7 @@ const COMMANDS = {
             // The storyteller reports how long its scene took. It cannot wind the clock back, and
             // it cannot jump ahead on its own: long stretches are asked for by the player.
             if (mins < 0) throw new Error('time does not run backwards');
+            if (mins > 0 && aiTimeBudget <= 0) throw new Error('this reply has already covered all the time it may: longer stretches are the player\'s call');
             if (mins > aiTimeBudget) { mins = aiTimeBudget; note = ' (capped: longer stretches are the player\'s call)'; }
             aiTimeBudget -= mins;
         }
@@ -438,6 +471,10 @@ const COMMANDS = {
     jump(st, [name]) {
         const sys = findByName(galaxy().systems, name);
         if (!sys) throw new Error(`unknown star system "${name}"`);
+        // The storyteller cannot move the character between stars in an instant. A journey in
+        // the character's own ship, or one already under way, is lived through the Nav tab.
+        if (aiMode && st.transit) throw new Error('the jump is still under way: arrival comes when the transit time has passed');
+        if (aiMode && st.ship) throw new Error('the character\'s own ship travels only when the player lays in a course and jumps from the Nav tab');
         st.transit = null;
         st.loc = { system: sys.id, station: 0, docked: false, place: '' };
         st.visited[sys.id] = true;

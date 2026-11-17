@@ -18,6 +18,8 @@ import { registerCommand, onTick, onArrival, fmtDuration, isAiCommand } from '..
 import { registerPromptSection } from '../core/ailink.js';
 import { systemDistance, factionById } from '../systems/galaxy.js';
 import { blip } from './sfx.js';
+import { registerIntent, intent } from '../core/intents.js';
+import { registerHear, readQty, readHours } from '../core/hear.js';
 
 let sel = null;      // good open in the exchange
 let qty = 10;
@@ -29,10 +31,6 @@ const ageText = (mins) => (mins < 90 ? 'live' : mins < 2 * DAY ? `${Math.round(m
 const where = (o) => (o.dist ? `${o.dist} ly` : 'same system');
 const holdOf = (st, id) => st.cargo.filter(c => c.comId === id).reduce((n, c) => n + c.qty, 0);
 
-function act(fn) {
-    try { const text = fn(); if (text) toast('success', text); blip('click'); } catch (e) { toast('warning', e.message); blip('error'); }
-    commit('economy');
-}
 
 // ---- Graph ----
 
@@ -311,23 +309,56 @@ export function initMarketUi() {
         'mk-step'(el) { qty = clamp((Math.floor(qty) || 0) + Number(el.dataset.d), 1, 9999); redraw(); },
         'mk-max'(el) { qty = Math.max(1, Number(el.dataset.n) || 1); redraw(); },
         'mk-qty'(el) { qty = clamp(Math.floor(Number(el.value)) || 1, 1, 9999); redraw(); },
-        'mk-buy'() { if (sel) act(() => buyGood(sel, qty)); },
-        'mk-sell'() { if (sel) act(() => sellGood(sel, qty)); },
+        'mk-buy'() { if (sel) intent('mk-buy', { id: sel, qty: Math.floor(qty) }); },
+        'mk-sell'() { if (sel) intent('mk-sell', { id: sel, qty: Math.floor(qty) }); },
         'mk-view'(el) { viewSys = Number(el.value); redraw(); },
-        'mk-report'() { act(() => buyReport(viewSys)); },
-        'mk-feed'(el) { act(() => buyFeed(el.dataset.f)); },
+        'mk-report'() { intent('mk-report', { sys: viewSys }); },
+        'mk-feed'(el) { intent('mk-feed', { f: el.dataset.f }); },
         'mk-haggle'() {
             const st = S();
             const good = sel ? goodById(sel) : null;
             toInput(`*${st.captain.name} finds the broker and tries to talk the price ${good ? `of ${good.name.toLowerCase()} ` : ''}down.*`);
             toast('info', 'Play out the bargaining in the chat. The result changes the prices here.');
         },
-        'port-buy'(el) { act(() => buyStore(el.dataset.kind, Number(el.dataset.n))); },
-        'port-ammo'(el) { act(() => restock(el.dataset.key)); },
-        'yard-order'(el) { act(() => orderYard(el.dataset.kind, el.dataset.id)); },
-        'field'(el) { act(() => fieldWork(el.dataset.kind, el.dataset.id)); },
-        'pay-wages'() { act(() => payOwedWages()); },
+        'port-buy'(el) { intent('port-buy', { kind: el.dataset.kind, n: Number(el.dataset.n) }); },
+        'port-ammo'(el) { intent('port-ammo', { key: el.dataset.key }); },
+        'yard-order'(el) { intent('yard-order', { kind: el.dataset.kind, id: el.dataset.id ?? '' }); },
+        'field'(el) { intent('field', { kind: el.dataset.kind, id: el.dataset.id ?? '' }); },
+        'pay-wages'() { intent('pay-wages'); },
     });
+
+    // What these buttons write into the chat, and what the game does when it is sent.
+    const goodName = (id) => (goodById(id)?.name ?? id).toLowerCase();
+    const sysName = (id) => galaxy()?.systems[id]?.name ?? 'that system';
+    const STORE = { fuel: 'fuel', supplies: 'crew-days of supplies', parts: 'spare parts' };
+    registerIntent('mk-buy', { line: (a) => `I buy ${a.qty} t of ${goodName(a.id)} at the trading terminal.`, run: (a) => buyGood(a.id, a.qty) });
+    registerIntent('mk-sell', { line: (a) => `I sell ${a.qty} t of ${goodName(a.id)} at the trading terminal.`, run: (a) => sellGood(a.id, a.qty) });
+    registerIntent('mk-report', { line: (a) => `I pay an information broker for a report on the markets of ${sysName(a.sys)}.`, run: (a) => buyReport(a.sys) });
+    registerIntent('mk-feed', { line: (a) => `I subscribe to the ${factionById(a.f)?.name ?? a.f} market feed for a week.`, run: (a) => buyFeed(a.f) });
+    registerIntent('port-buy', {
+        line: (a, st) => (a.kind === 'fuel' ? `I have the ship's tanks topped up at the fuel dock.` : `I have ${a.n >= 1e6 ? '' : `${a.n} `}${STORE[a.kind] ?? a.kind} loaded aboard ${st.ship?.name ?? 'the ship'}.`),
+        run: (a) => buyStore(a.kind, a.n),
+    });
+    registerIntent('port-ammo', { line: (a) => (a.key === 'all' ? 'I have the armourer refill every magazine.' : 'I have the armourer refill a magazine.'), run: (a) => restock(a.key) });
+    registerIntent('yard-order', { line: (a, st) => `I book ${st.ship?.name ?? 'the ship'} into the repair yard${/^all/.test(a.kind) ? '' : ' for one job'}.`, run: (a) => orderYard(a.kind, a.id) });
+    registerIntent('field', { line: () => 'I break out the spare parts and get to work on the ship.', run: (a) => fieldWork(a.kind, a.id) });
+    // The same actions, heard in the player's own words.
+    const rowsHere = (st) => { const p = tradingPost(st); return p ? marketAt(st, p.key) : []; };
+    registerHear({ id: 'buy', intent: 'mk-buy', order: 50, verb: 'Buy', what: 'Buy trade goods as cargo at the station market', when: (st) => !!tradingPost(st),
+        options: (st) => rowsHere(st).filter(r => r.stock > 0).map(r => ({ label: r.good.name.toLowerCase(), args: { id: r.good.id } })),
+        args: (st, t, o) => ({ id: o.args.id, qty: readQty(t, 1) }), label: (a) => `Buy ${a.qty} t ${goodName(a.id)}`,
+        re: /\b(buy|purchase|load up on)\b/i });
+    registerHear({ id: 'sell', intent: 'mk-sell', order: 50, verb: 'Sell', what: 'Sell cargo from the hold at the station market', when: (st) => !!tradingPost(st) && st.cargo.some(c => c.comId),
+        options: (st) => [...new Set(st.cargo.filter(c => c.comId).map(c => c.comId))].map(id => ({ label: goodName(id), args: { id } })),
+        args: (st, t, o) => ({ id: o.args.id, qty: readQty(t, holdOf(st, o.args.id)) }), label: (a) => `Sell ${a.qty} t ${goodName(a.id)}`,
+        re: /\b(sell|offload|unload)\b/i });
+    registerHear({ id: 'refuel', intent: 'port-buy', order: 55, verb: 'Refuel the ship', what: 'Refuel the ship at the station', when: (st) => !!st.ship && !!storePrices(st),
+        args: () => ({ kind: 'fuel', n: 1e9 }), re: /\b(refuel|top (?:up|off) the tanks|fill (?:her|it|the tanks) up)\b/i });
+    registerHear({ id: 'supplies', intent: 'port-buy', order: 55, repeat: true, verb: 'Load supplies', what: 'Buy food and life-support supplies for the ship', when: (st) => !!st.ship && !!storePrices(st),
+        args: (st, t) => ({ kind: 'supplies', n: readQty(t, 10) }), label: (a) => `Load ${a.n} crew-days of supplies`, re: /\b(provisions|supplies)\b/i });
+    registerHear({ id: 'wages', intent: 'pay-wages', order: 55, verb: 'Pay the crew', what: 'Pay the crew the wages they are owed', when: (st) => !!econ(st).owedWages,
+        args: () => ({}), re: /\bpay\b[^.!?]{0,20}\b(crew|wages)\b/i });
+    registerIntent('pay-wages', { line: () => 'I pay the crew the wages they are owed.', run: () => payOwedWages() });
 
     const findGood = (name) => {
         const n = String(name ?? '').toLowerCase().trim();

@@ -19,14 +19,12 @@ import { registerCommand, onTick, onArrival, advanceTime, fmtDuration, isAiComma
 import { registerPromptSection } from '../core/ailink.js';
 import { galaxy } from '../core/state.js';
 import { blip } from './sfx.js';
+import { registerIntent, intent } from '../core/intents.js';
+import { registerHear, readQty, readHours } from '../core/hear.js';
 
 let openOffer = null;
 const cr = (n) => `${fmtInt(n)} cr`;
 
-function act(fn) {
-    try { const text = fn(); if (text) toast('success', text); blip('click'); } catch (e) { toast('warning', e.message); blip('error'); }
-    commit('life');
-}
 
 /** The commitment card: what is booked or under way, and how far along it is. */
 function activityHtml(st) {
@@ -250,17 +248,17 @@ export function initLifeUi() {
     registerTab({ id: 'station', label: 'Station', icon: 'fa-building', order: 25, when: free, widgets: ['whereabouts', 'jobs', 'bank', 'licences', 'shipyard', 'parking'] });
 
     registerActions({
-        'life-work'(el) { act(() => takeShift(el.dataset.id)); },
-        'area-go'(el) { act(() => moveTo(el.dataset.id)); },
-        'act-start'() { act(() => clockIn()); },
-        async 'act-quit'() { const a = S().activity; if (a && (!a.on || await confirmAsk('Walk out?', 'You lose what is left of it.'))) act(() => quit()); },
-        'life-live'(el) { act(() => living(el.dataset.kind)); },
-        'life-enrol'(el) { act(() => enrol(el.dataset.id)); },
-        'life-course'() { act(() => courseStep()); },
+        'life-work'(el) { intent('life-work', { id: el.dataset.id }); },
+        'area-go'(el) { intent('area-go', { id: el.dataset.id }); },
+        'act-start'() { intent('act-start'); },
+        async 'act-quit'() { const a = S().activity; if (a && (!a.on || await confirmAsk('Walk out?', 'You lose what is left of it.'))) intent('act-quit'); },
+        'life-live'(el) { intent('life-live', { kind: el.dataset.kind }); },
+        'life-enrol'(el) { intent('life-enrol', { id: el.dataset.id }); },
+        'life-course'() { intent('life-course'); },
         async 'life-borrow'(el) {
             const v = await ask(`Borrow how much? (up to ${fmtInt(el.dataset.max)} cr)`, el.dataset.max);
             const n = Number(String(v ?? '').replace(/[^\d.]/g, ''));
-            if (n) act(() => takeLoan(el.dataset.lender, n));
+            if (n) intent('life-borrow', { lender: el.dataset.lender, n });
         },
         async 'life-repay'(el) {
             const st = S();
@@ -268,21 +266,81 @@ export function initLifeUi() {
             if (!loan) return;
             const v = await ask(`Pay how much toward ${fmtInt(loan.balance)} cr?`, String(Math.min(Math.ceil(loan.balance), Math.floor(st.captain.credits))));
             const n = Number(String(v ?? '').replace(/[^\d.]/g, ''));
-            if (n) act(() => repay(loan.id, n));
+            if (n) intent('life-repay', { id: loan.id, n });
         },
         'yard-open'(el) { openOffer = openOffer === el.dataset.id ? null : el.dataset.id; commit('ui'); },
-        'yard-inspect'(el) { act(() => inspect(el.dataset.id, el.dataset.how)); },
+        'yard-inspect'(el) { intent('yard-inspect', { id: el.dataset.id, how: el.dataset.how }); },
         async 'yard-buy'(el) {
             const name = await ask('Name her', '');
             if (name === null || name === undefined || name === false) return;
-            act(() => buyShip(el.dataset.id, { finance: el.dataset.fin === '1', name: String(name).trim() }));
+            intent('yard-buy', { id: el.dataset.id, finance: el.dataset.fin === '1', name: String(name).trim() });
             openOffer = null;
         },
-        async 'yard-sell'() { if (await confirmAsk('Sell your ship?', 'This cannot be undone.')) act(() => sellShip()); },
-        'park'(el) { act(() => layUp(el.dataset.mode)); },
-        'park-reclaim'() { act(() => reclaim()); },
-        'custody'(el) { act(() => custodyAct(el.dataset.a, advanceTime)); },
+        async 'yard-sell'() { if (await confirmAsk('Sell your ship?', 'This cannot be undone once the message is sent and answered.')) intent('yard-sell'); },
+        'park'(el) { intent('park', { mode: el.dataset.mode }); },
+        'park-reclaim'() { intent('park-reclaim'); },
+        'custody'(el) { intent('custody', { a: el.dataset.a }); },
     });
+
+    // What these buttons write into the chat, and what the game does when it is sent.
+    const shipName = (st) => st.ship?.name ?? 'my ship';
+    const offer = (st, id) => { const y = yardStock(st); return y ? [...y.new, ...y.used].find(o => o.id === id) : null; };
+    const offerName = (st, id) => { const o = offer(st, id); return o ? `${o.used ? 'used ' : ''}${o.cls?.name ?? 'ship'}` : 'ship'; };
+    const LIVE = { meal: 'I buy a hot meal at a food stall and eat it.', bunk: 'I rent a capsule bunk for the night.', room: 'I take a private room for the night.' };
+    const CUSTODY = {
+        eat: (c) => (c.type === 'prison' ? 'I eat in the mess hall.' : 'I eat what I am given.'),
+        work: (c) => (c.type === 'prison' ? 'I go out on the work detail.' : 'I begin the day\'s work.'),
+        fight: () => 'I step into the pit for my bout.',
+        join: () => 'I ask to join the crew.',
+        buy: () => 'I offer to buy my freedom.',
+        defy: () => 'I defy them.',
+        escape: () => 'I try to escape.',
+    };
+    registerIntent('life-work', { line: (a, st) => `I take the ${(jobBoard(st).find(j => j.id === a.id)?.name ?? 'job').toLowerCase()} shift off the job board.`, run: (a) => takeShift(a.id) });
+    registerIntent('area-go', { line: (a, st) => `I walk to the ${areaName(st, a.id).toLowerCase()}.`, run: (a) => moveTo(a.id) });
+    registerIntent('act-start', { line: (a, st) => `I get started: ${(st.activity?.name ?? 'the work').toLowerCase()}.`, run: () => clockIn() });
+    registerIntent('act-quit', { line: (a, st) => (st.activity?.on ? `I walk out of ${(st.activity?.name ?? 'it').toLowerCase()}.` : `I call off ${(st.activity?.name ?? 'what I had booked').toLowerCase()}.`), run: () => quit() });
+    registerIntent('life-live', { line: (a) => LIVE[a.kind] ?? `I pay for ${(LIVING[a.kind]?.name ?? a.kind).toLowerCase()}.`, run: (a) => living(a.kind) });
+    registerIntent('life-enrol', { line: (a) => `I enrol for the ${LICENCES[a.id]?.name ?? 'licence'} course at the flight school.`, run: (a) => enrol(a.id) });
+    registerIntent('life-course', { line: () => 'I go to the flight school for the next part of my course.', run: () => courseStep() });
+    registerIntent('life-borrow', { line: (a) => `I sign for a loan of ${cr(a.n)} with the ${(LENDERS[a.lender]?.name ?? 'lender').replace(/^./, c => c.toLowerCase())}.`, run: (a) => takeLoan(a.lender, a.n) });
+    registerIntent('life-repay', { line: (a, st) => `I pay ${cr(a.n)} toward my loan${(() => { const l = loans(st).find(x => x.id === a.id); return l ? ` with the ${LENDERS[l.lender]?.name ?? 'lender'}` : ''; })()}.`, run: (a) => repay(a.id, a.n) });
+    registerIntent('yard-inspect', { line: (a, st) => (a.how === 'pay' ? `I pay a surveyor to go over the ${offerName(st, a.id)}.` : `I go over the ${offerName(st, a.id)} myself before I decide.`), run: (a) => inspect(a.id, a.how) });
+    registerIntent('yard-buy', { line: (a, st) => `I buy the ${offerName(st, a.id)}${a.finance ? ' on finance' : ''}${a.name ? ` and name her ${a.name}` : ''}.`, run: (a) => buyShip(a.id, { finance: a.finance, name: a.name }) });
+    registerIntent('yard-sell', { line: (a, st) => `I sell ${shipName(st)} to the shipyard.`, run: () => sellShip() });
+    registerIntent('park', { line: (a, st) => `I lay ${shipName(st)} up in ${a.mode === 'hangar' ? 'a locked hangar' : 'an open pad'}.`, run: (a) => layUp(a.mode) });
+    registerIntent('park-reclaim', { line: (a, st) => `I go to take ${st.laidUp?.ship?.name ?? 'my ship'} back.`, run: () => reclaim() });
+    // The same actions, heard in the player's own words.
+    const atPort = (st) => !st.custody && !st.transit && !!port(st);
+    registerHear({ id: 'walk', intent: 'area-go', order: 10, verb: 'Walk to the', what: 'Walk to another part of the station', when: atPort,
+        options: (st) => areasHere(st).filter(a => a.id !== areaOf(st)).map(a => ({ label: a.name.toLowerCase(), args: { id: a.id }, words: [a.id] })),
+        args: (st, t, o) => o.args, re: /\b(walk|head|go|wander|stroll|make (?:my|our) way)\b[^.!?]{0,30}\bto\b/i });
+    registerHear({ id: 'meal', intent: 'life-live', order: 60, verb: 'Buy a hot meal', what: 'Buy a hot meal at a food stall, canteen or bar on the station and eat it', when: atPort,
+        args: () => ({ kind: 'meal' }), re: /\b(buy|grab|order|get)\b[^.!?]{0,25}\b(meal|food|bite|noodles|dinner|lunch|breakfast)\b/i });
+    registerHear({ id: 'bed', intent: 'life-live', order: 70, verb: 'Rent a', what: 'Pay for a bed or a room on the station to sleep in', when: atPort,
+        options: () => [{ label: 'capsule bunk', args: { kind: 'bunk' }, words: ['bunk', 'capsule', 'cheap'] }, { label: 'private room', args: { kind: 'room' }, words: ['room', 'hotel', 'private'] }],
+        args: (st, t, o) => o.args, re: /\b(rent|book|pay for|take)\b[^.!?]{0,20}\b(bunk|capsule|room|bed)\b/i });
+    registerHear({ id: 'shift', intent: 'life-work', order: 80, verb: 'Take the shift:', what: 'Take a paid shift from the station job board', when: atPort,
+        options: (st) => jobBoard(st).filter(j => !j.why).map(j => ({ label: j.name.toLowerCase(), args: { id: j.id }, hint: j.desc })),
+        args: (st, t, o) => o.args, re: /\b(take|sign up for|pick up)\b[^.!?]{0,20}\b(shift|job|work)\b/i });
+    registerHear({ id: 'clockin', intent: 'act-start', order: 85, verb: 'Start', when: (st) => !!st.activity && !st.activity.on,
+        get what() { const a = S()?.activity; return `Get started on what they booked${a ? `: ${a.name}` : ''}`; }, label: (a, st) => `Start: ${(st.activity?.name ?? 'work').toLowerCase()}`,
+        args: () => ({}), re: /\b(clock in|start (?:my |the )?(?:shift|work)|get to work)\b/i });
+    registerHear({ id: 'quit', intent: 'act-quit', order: 5, when: (st) => !!st.activity, label: (a, st) => `Walk out of ${(st.activity?.name ?? 'it').toLowerCase()}`,
+        get what() { const a = S()?.activity; return `Quit, walk out of or call off what they are doing${a ? `: ${a.name}` : ''}`; },
+        args: () => ({}), re: /\b(quit|walk out|walk off the job|call it off)\b/i });
+    registerHear({ id: 'custody', intent: 'custody', order: 50, verb: 'In custody:', what: 'Do something allowed in custody (prison or slavery)', when: (st) => !!st.custody,
+        options: () => [
+            { label: 'eat', args: { a: 'eat' }, hint: 'eat what the mess or the owner gives' },
+            { label: 'work', args: { a: 'work' }, hint: 'go out on the work detail or begin the day\'s work' },
+            { label: 'fight', args: { a: 'fight' }, hint: 'fight a bout in the pit' },
+            { label: 'ask to join', args: { a: 'join' }, hint: 'ask to join the captors\' crew' },
+            { label: 'buy freedom', args: { a: 'buy' }, hint: 'offer to buy their freedom' },
+            { label: 'defy', args: { a: 'defy' }, hint: 'openly defy the guards or owner' },
+            { label: 'escape', args: { a: 'escape' }, hint: 'try to escape' },
+        ],
+        args: (st, t, o) => o.args, re: /\b(escape|break out|defy|refuse)\b/i });
+    registerIntent('custody', { line: (a, st) => (CUSTODY[a.a] ?? (() => 'I wait.'))(st.custody ?? {}), run: (a) => custodyAct(a.a, advanceTime) });
 
     registerCommand('area', (st, args) => moveTo(args.join(' '), { ai: isAiCommand() }), ['goto', 'walk']);
     registerCommand('arrest', (st, [days = '30', ...why]) => {

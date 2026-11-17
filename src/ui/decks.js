@@ -9,6 +9,21 @@ import { aboardShip, playerRoom, clearance, playerShip, SC } from '../systems/sh
 import { advanceTime } from '../systems/sim.js';
 import { registerPromptSection } from '../core/ailink.js';
 import { blip } from './sfx.js';
+import { registerIntent, intent } from '../core/intents.js';
+import { registerHear, readQty, readHours } from '../core/hear.js';
+
+/** Moves the character to a room of the ship they are aboard. */
+function goRoom(id, mins) {
+    const st = S();
+    const ship = aboardShip(st);
+    const room = ship?.plan.rooms.find(r => r.id === id);
+    if (!room) throw new Error('no such room aboard');
+    st.loc.place = `${room.name}, deck ${room.deck}, aboard ${ship.name}`;
+    st.aboard = { ship: ship.name, room: room.id, place: st.loc.place };
+    if (mins) advanceTime(mins);
+    view.deck = room.deck;
+    return `In ${room.name}, deck ${room.deck}`;
+}
 
 const view = { deck: null, room: null, ship: null };
 const TYPICAL_PX = 84; // an ordinary compartment is drawn about this wide
@@ -73,18 +88,24 @@ export function initDecksUi() {
         'dk-deck'(el) { view.deck = Number(el.dataset.n); view.room = null; redraw(); },
         'dk-room'(el) { view.room = view.room === el.dataset.id ? null : el.dataset.id; redraw(); },
         'dk-go'(el) {
-            const st = S();
-            const ship = aboardShip(st);
-            const room = ship?.plan.rooms.find(r => r.id === el.dataset.id);
-            if (!room) return;
-            st.loc.place = `${room.name}, deck ${room.deck}, aboard ${ship.name}`;
-            st.aboard = { ship: ship.name, room: room.id, place: st.loc.place };
-            if (!st.shipCombat) advanceTime(Number(el.dataset.m) || 1);
-            view.deck = room.deck;
-            blip('click');
-            toast('info', `You make your way to ${room.name}.`);
-            commit('move');
+            // In a space battle moving about the ship is part of the fight; otherwise it is a walk.
+            if (S().shipCombat) { try { goRoom(el.dataset.id, 0); } catch (e) { toast('warning', e.message); } commit('move'); return; }
+            intent('dk-go', { id: el.dataset.id, m: Number(el.dataset.m) || 1 });
         },
+    });
+    registerHear({ id: 'room', intent: 'dk-go', order: 10, verb: 'Go to the', what: 'Walk to another compartment of the ship they are aboard', when: (st) => !!aboardShip(st) && !st.custody,
+        options: (st) => {
+            const ship = aboardShip(st);
+            const here = playerRoom(st)?.id;
+            const rooms = ship.plan.rooms.filter(r => !r.id.startsWith('x') && r.id !== here);
+            const seen = new Set();
+            // Big ships repeat rooms (twenty berthing decks): keep one of each name.
+            return rooms.filter(r => !seen.has(r.name) && seen.add(r.name)).slice(0, 120).map(r => ({ label: r.name.toLowerCase(), args: { id: r.id, m: 2 } }));
+        },
+        args: (st, t, o) => o.args, re: /\b(walk|head|go|make (?:my|our) way)\b[^.!?]{0,30}\bto the\b/i });
+    registerIntent('dk-go', {
+        line: (a, st) => `I make my way to the ${(aboardShip(st)?.plan.rooms.find(r => r.id === a.id)?.name ?? 'next compartment').toLowerCase()}.`,
+        run: (a) => goRoom(a.id, a.m),
     });
     registerPromptSection((st) => {
         const ship = aboardShip(st);

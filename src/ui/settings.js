@@ -4,6 +4,7 @@ import { S, deleteCampaign, importCampaign, notify } from '../core/state.js';
 import { applyLayout, confirmAsk } from './hud.js';
 import { refreshPrompt } from '../core/ailink.js';
 import { sideProfiles, sideCall } from '../core/llm.js';
+import { testJev } from '../core/hear.js';
 
 const PALETTES = {
     cyan: 'Fleet cyan',
@@ -89,6 +90,19 @@ export function initSettings() {
             ${check('tracker', 'Tracker pass: a model reads each reply and updates the state', 'One extra call per AI reply. Works together with, or instead of, the hidden tags written by the story model')}
             ${check('loreAgent', 'Lorebook agent: keeps a campaign lorebook up to date', 'Creates, updates, merges and switches entries in a lorebook bound to this chat')}
             <label>Lorebook agent runs every <input type="number" class="text_pole" min="1" max="50" data-sfs="loreEvery"> AI replies</label>
+            <h4>Actions</h4>
+            ${check('chatActions', 'Panel actions go through the chat', 'A button such as Buy or Rent bunk writes a line into your message, and the game carries it out when you send it, before the AI answers. Off: buttons act at once.')}
+            ${check('actionStars', 'Write those lines as *actions*', 'Wraps the line in asterisks, the usual roleplay mark for an action')}
+            <small class="sf-dim">Actions you write yourself ("I grab a hot meal at a stall") are read when you send. Sure readings happen like a panel action; unsure ones show as a chip to confirm.</small>
+            <label>Read my own words with <select class="text_pole" data-sfs="hearMode"><option value="auto">Best available (Jev, then a connection profile, then patterns)</option><option value="jev">Jev (TypeSafe)</option><option value="side">The background model</option><option value="text">Patterns only (suggestions, no extra calls)</option><option value="off">Off</option></select></label>
+            <label title="From the TypeSafe developer console. Stored in SillyTavern's settings file on this machine, like other extension settings.">Jev API key <input type="password" class="text_pole" autocomplete="off" data-sfs="jevKey" placeholder="ts-…"></label>
+            <label title="How Jev is reached. Through SillyTavern needs enableCorsProxy: true in config.yaml.">Jev connection <select class="text_pole" data-sfs="jevRoute"><option value="auto">Direct, then through SillyTavern if blocked</option><option value="direct">Direct from the browser</option><option value="proxy">Through SillyTavern's CORS proxy</option></select></label>
+            <label title="Readings at least this sure are carried out on send.">Act when at least <input type="number" class="text_pole" min="0.5" max="1" step="0.05" data-sfs="hearSure"> sure</label>
+            <label title="Readings between this and the line above are offered as a chip to confirm. Below it they are ignored.">Ask when at least <input type="number" class="text_pole" min="0.1" max="0.95" step="0.05" data-sfs="hearAsk"> sure</label>
+            <div class="flex-container"><div class="menu_button" id="sf-jev-test">Test Jev</div></div>
+            <h4>Game master</h4>
+            ${check('gmMode', 'Game master mode', 'Shows the hand-edit tools: click any number to change it, the clock buttons, staged fights, the command console and /sf commands. A repair tool for a broken state; leave it off to play.')}
+            <small class="sf-dim">Off in normal play: the world changes only through what your character does. Turn it on to fix a broken state.</small>
             <h4>Campaign in this chat</h4>
             <div class="flex-container">
                 <div class="menu_button" id="sf-export">Export save</div>
@@ -115,6 +129,13 @@ export function initSettings() {
             const out = await sideCall({ system: 'You are a ship computer.', prompt: 'Reply with exactly: LINK ESTABLISHED', maxTokens: 20 });
             toast('success', `Answered in ${((Date.now() - t0) / 1000).toFixed(1)} s: ${String(out).slice(0, 60)}`);
         } catch (e) { toast('error', `The background model did not answer: ${e.message}`); }
+    });
+    wrap.querySelector('#sf-jev-test').addEventListener('click', async () => {
+        toast('info', 'Calling Jev…');
+        try {
+            const r = await testJev();
+            toast('success', `Jev answered in ${(r.ms / 1000).toFixed(2)} s (${r.route}). "I buy a hot meal" read as an action: ${Math.round(r.yes * 100)}%.`);
+        } catch (e) { toast('error', `Jev did not answer: ${e.message}`); }
     });
     const sync = () => {
         wrap.querySelectorAll('[data-sfs]').forEach(el => {

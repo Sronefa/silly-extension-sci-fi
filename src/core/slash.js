@@ -1,5 +1,5 @@
 // Slash commands and macros so Ship-OS can be driven from Quick Replies and scripts.
-import { ctx } from './st.js';
+import { ctx, gmOn, toast } from './st.js';
 import { S, commit, fmtDate, locationLabel } from './state.js';
 import { runBlock } from '../systems/sim.js';
 import { buildTelemetry } from './ailink.js';
@@ -36,6 +36,8 @@ function macro(name, handler, description) {
 export function initSlash() {
     add('sf', (text) => {
         if (!text.trim()) { toggleHud(); return ''; }
+        // Running raw commands is a game master tool, like the console.
+        if (!gmOn()) { toast('info', 'Ship-OS commands need game master mode (Ship-OS settings).'); return ''; }
         const results = runBlock(text);
         commit('slash');
         return results.map(r => r.text).filter(Boolean).join('; ');
