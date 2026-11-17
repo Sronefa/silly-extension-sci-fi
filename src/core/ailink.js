@@ -5,7 +5,8 @@ import { S, commit, snapshot, rollbackTo, fmtDate, locationLabel, cargoUsed, car
 import { runBlock, needStatuses, transitInfo, fmtDuration, advanceTime, setAiTimeBudget, passMinutes, aiTimeLeft, aiCreditsLeft } from '../systems/sim.js';
 import { estimateMinutes, grantPrompt, grantLine, passTime, pendingAsk, pendingAsleep, setPendingAsk, takeTypedAsk } from '../systems/clock.js';
 import { toast } from './st.js';
-import { takeQueue, runIntent, cutLine, intentPrompt } from './intents.js';
+import { takeQueue, runIntent, cutLine, intentPrompt, setBarNote } from './intents.js';
+import { hear } from './hear.js';
 import { confirmAsk } from '../ui/hud.js';
 import { fmtInt } from './util.js';
 import { NEEDS, SHIP_SYSTEMS, FACTIONS, SHIP_WEAPONS, PERSONAL_WEAPONS, ARMORS } from '../data/catalog.js';
@@ -389,7 +390,7 @@ export function autoTime(text = '') {
  * to pass (picked from the chat bar or typed as [+2h] at the end). The engine carries them out
  * before the reply, so the storyteller narrates what really happened.
  */
-function processUserMessage(mesId) {
+async function processUserMessage(mesId) {
     const cfg = settings();
     const cur = S();
     if (!cfg.enabled || !cur) return;
@@ -402,9 +403,22 @@ function processUserMessage(mesId) {
     const typed = takeTypedAsk(msg.mes);
     if (typed) { ask = typed.mins; asleep = typed.asleep; msg.mes = typed.text; }
     const acts = takeQueue();
-    if (!ask && !acts.length) return;
+    // What the player wrote in their own words is read for actions too. The lines the panel
+    // wrote are left out, so a button's action is not heard a second time.
+    let heard = { acts: [], suggest: [] };
+    const own = acts.reduce((t, a) => cutLine(t, a.line), msg.mes);
+    if (own.trim()) {
+        setBarNote('Reading your message…');
+        try { heard = await hear(own, { skip: acts.map(a => a.name), skipIds: ask ? ['sleep', 'relax'] : [] }); } catch (e) { console.warn('[Ship-OS] hearing failed', e); }
+        setBarNote('');
+        if (heard.error) toast('warning', `Could not read your actions with ${heard.via === 'jev' ? 'Jev' : 'the background model'} (${heard.error}). Only obvious ones are suggested.`);
+        // The chat may have been switched while the reader was busy.
+        if (ctx().chat?.[mesId] !== msg || !S()) return;
+    }
+    acts.push(...heard.acts);
+    if (!ask && !acts.length && !heard.suggest.length) return;
     msg.extra ??= {};
-    msg.extra.scifi_os = { applied: [], failed: [], acts, ask: ask || 0, asleep: !!asleep };
+    msg.extra.scifi_os = { applied: [], failed: [], acts, suggest: heard.suggest, ask: ask || 0, asleep: !!asleep };
     applyUserMessage(mesId, msg);
     if (Array.isArray(msg.swipes) && msg.swipe_id !== undefined) msg.swipes[msg.swipe_id] = msg.mes;
     refreshPrompt();
@@ -418,7 +432,7 @@ function applyUserMessage(mesId, msg) {
     for (const a of x.acts ?? []) {
         try { a.text = runIntent(a); a.ok = true; } catch (e) { a.ok = false; a.text = String(e.message ?? e); }
     }
-    cur.lastActs = (x.acts ?? []).length ? x.acts.map(a => ({ ok: a.ok, text: a.text, line: a.line })) : null;
+    cur.lastActs = (x.acts ?? []).length ? x.acts.map(a => ({ ok: a.ok, text: a.text, line: a.line || a.label })) : null;
     const bad = (x.acts ?? []).filter(a => !a.ok);
     if (bad.length) toast('warning', bad.map(a => `${a.label}: ${a.text}`).join(' · '));
     x.applied = [];
@@ -438,28 +452,26 @@ function applyUserMessage(mesId, msg) {
 }
 
 /**
- * Takes back one action of the player's latest message. The state goes back to just before the
- * message, the reply that narrated it is removed, the rest of the message is carried out again,
- * and the storyteller answers afresh.
+ * Changes what the player's latest message did (takes an action back, or confirms one the game
+ * was unsure of). The state goes back to just before the message, the reply that narrated it is
+ * removed, the message is carried out again with the change, and the storyteller answers afresh.
  */
-async function undoAct(mesId, idx) {
+async function redoMessage(mesId, change, { title, removes = 'The reply after this message is removed too, and the storyteller answers again.' }) {
     const c = ctx();
     const msg = c.chat?.[mesId];
     const x = msg?.extra?.scifi_os;
-    const act = x?.acts?.[idx];
-    if (!act) return;
+    if (!x) return;
     const later = c.chat.slice(mesId + 1);
-    if (later.some(m => m.is_user && !m.is_system)) { toast('info', 'Only the actions of your latest message can be taken back.'); return; }
+    if (later.some(m => m.is_user && !m.is_system)) { toast('info', 'Only your latest message can be changed.'); return; }
     const replies = later.length;
-    if (replies && !(await confirmAsk(`Take back "${act.label}"?`, 'The reply after this message is removed too, and the storyteller answers again.'))) return;
+    if (replies && !(await confirmAsk(title, removes))) return;
     for (let i = 0; i < replies; i++) {
         if (typeof c.deleteLastMessage === 'function') await c.deleteLastMessage();
         else { await c.executeSlashCommandsWithOptions?.(`/cut ${c.chat.length - 1}`); }
     }
     if (c.chat.length !== mesId + 1) { toast('error', 'Could not remove the reply. Delete it by hand, then try again.'); return; }
     rollbackTo(mesId);
-    x.acts.splice(idx, 1);
-    msg.mes = cutLine(msg.mes, act.line);
+    change(x, msg);
     if (Array.isArray(msg.swipes) && msg.swipe_id !== undefined) msg.swipes[msg.swipe_id] = msg.mes;
     if (!msg.mes.trim() && !x.acts.length && !x.ask) {
         // Nothing left of the message: it goes as well.
@@ -479,6 +491,35 @@ async function undoAct(mesId, idx) {
     }
 }
 
+function undoAct(mesId, idx) {
+    const act = ctx().chat?.[mesId]?.extra?.scifi_os?.acts?.[idx];
+    if (!act) return Promise.resolve();
+    return redoMessage(mesId, (x, msg) => {
+        x.acts.splice(idx, 1);
+        msg.mes = cutLine(msg.mes, act.line);
+    }, { title: `Take back "${act.label}"?` });
+}
+
+/** The game was unsure what the player meant; they say yes, so it happens after all. */
+function confirmSuggest(mesId, idx) {
+    const sug = ctx().chat?.[mesId]?.extra?.scifi_os?.suggest?.[idx];
+    if (!sug) return Promise.resolve();
+    return redoMessage(mesId, (x) => {
+        x.suggest.splice(idx, 1);
+        x.acts.push({ ...sug, confirmed: true });
+    }, { title: `${sug.label}?`, removes: 'The reply after this message is written again with it.' });
+}
+
+/** No, that is not what the player meant: the suggestion goes away and nothing changes. */
+async function dropSuggest(mesId, idx) {
+    const c = ctx();
+    const x = c.chat?.[mesId]?.extra?.scifi_os;
+    if (!x?.suggest?.[idx]) return;
+    x.suggest.splice(idx, 1);
+    decorateMessage(mesId);
+    await c.saveChat?.();
+}
+
 /**
  * Chips under a message: what the engine did with it. The actions of the player's latest message
  * carry a × to take them back.
@@ -490,15 +531,16 @@ export function decorateMessage(mesId) {
     if (!el) return;
     el.querySelector('.sf-chip-row')?.remove();
     const acts = info?.acts ?? [];
-    if (!info?.applied?.length && !acts.length) return;
+    const sugg = info?.suggest ?? [];
+    if (!info?.applied?.length && !acts.length && !sugg.length) return;
     const latest = !c.chat.slice(mesId + 1).some(m => m.is_user && !m.is_system);
     const row = document.createElement('div');
     row.className = 'sf-chip-row';
     acts.forEach((a, i) => {
         const chip = document.createElement('span');
-        chip.className = `sf-chip sf-chip-act${a.ok === false ? ' bad' : ''}`;
+        chip.className = `sf-chip sf-chip-act${a.ok === false ? ' bad' : ''}${a.heard ? ' heard' : ''}`;
         chip.textContent = a.ok === false ? `${a.label}: ${a.text}` : (a.text || a.label);
-        chip.title = a.line ?? '';
+        chip.title = a.heard ? `Read from your words${a.p ? ` (${Math.round(a.p * 100)}% sure)` : ''}` : (a.line ?? '');
         if (latest && a.ok !== false) {
             const x = document.createElement('button');
             x.type = 'button';
@@ -508,6 +550,27 @@ export function decorateMessage(mesId) {
             x.addEventListener('click', (e) => { e.stopPropagation(); undoAct(mesId, i).catch(err => toast('error', err.message)); });
             chip.appendChild(x);
         }
+        row.appendChild(chip);
+    });
+    // Readings the game was not sure of: a tick makes them happen, a cross dismisses them.
+    if (latest) sugg.forEach((g, i) => {
+        const chip = document.createElement('span');
+        chip.className = 'sf-chip sf-chip-act sf-chip-ask';
+        chip.textContent = `${g.label}?`;
+        chip.title = `Did you mean this? Read from your words${g.p ? ` (${Math.round(g.p * 100)}% sure)` : ''}`;
+        const yes = document.createElement('button');
+        yes.type = 'button';
+        yes.className = 'sf-chip-x sf-chip-yes';
+        yes.textContent = '✓';
+        yes.title = 'Yes, do it';
+        yes.addEventListener('click', (e) => { e.stopPropagation(); confirmSuggest(mesId, i).catch(err => toast('error', err.message)); });
+        const no = document.createElement('button');
+        no.type = 'button';
+        no.className = 'sf-chip-x';
+        no.textContent = '×';
+        no.title = 'No, that is not what I meant';
+        no.addEventListener('click', (e) => { e.stopPropagation(); dropSuggest(mesId, i).catch(err => toast('error', err.message)); });
+        chip.append(yes, no);
         row.appendChild(chip);
     });
     for (const text of info.applied ?? []) {
@@ -525,7 +588,7 @@ function decorateAll() {
 
 export function initAiLink() {
     on('MESSAGE_RECEIVED', (id, type) => { processMessage(Number(id), type); refreshPrompt(); });
-    on('MESSAGE_SENT', (id) => { processUserMessage(Number(id)); setTimeout(decorateAll, 50); });
+    on('MESSAGE_SENT', async (id) => { await processUserMessage(Number(id)); setTimeout(decorateAll, 50); });
     on('USER_MESSAGE_RENDERED', (id) => { const n = Number(id); const m = ctx().chat?.[n]; if (m?.extra?.scifi_os) { try { ctx().updateMessageBlock?.(n, m); } catch { /* */ } decorateMessage(n); } });
     on('CHARACTER_MESSAGE_RENDERED', (id) => decorateMessage(Number(id)));
     on('MESSAGE_SWIPED', (id) => { if (rollbackTo(Number(id))) addLog('Timeline reverted (message swiped).', 'sys'); refreshPrompt(); });

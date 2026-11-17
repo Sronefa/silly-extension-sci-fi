@@ -17,6 +17,7 @@ import { registerPromptSection } from '../core/ailink.js';
 import { shipHas } from '../systems/market.js';
 import { blip } from './sfx.js';
 import { registerIntent, intent } from '../core/intents.js';
+import { registerHear, readQty, readHours } from '../core/hear.js';
 
 const cr = (n) => `${fmtInt(n)} cr`;
 const KIND_COLOR = { command: '#60a5fa', weapons: '#f87171', engineering: '#fbbf24', crew: '#a78bfa', medical: '#34d399', flight: '#22d3ee', hold: '#a3a3a3', service: '#94a3b8', public: '#f472b6' };
@@ -125,6 +126,8 @@ export function initSalvageUi() {
 
     // What these buttons write into the chat, and what the game does when it is sent.
     const partName = (st, id) => (st.cargo.find(x => x.id === id)?.name ?? 'the salvaged part').replace(/^./, c => c.toLowerCase());
+    registerHear({ id: 'board', intent: 'sv-board', order: 90, verb: 'Board the wreck', what: 'Suit up and board the derelict wreck here', when: (st) => !!boardable(st) && !wreckOf(st),
+        args: () => ({}), re: /\b(board|go aboard|cut (?:our|my) way into)\b[^.!?]{0,20}\b(wreck|derelict|hulk)\b/i });
     registerIntent('sv-board', { line: (a, st) => `I suit up and board the ${boardable(st)?.name ?? 'wreck'}.`, run: () => boardWreck() });
     registerIntent('sv-sell', { line: (a, st) => `I sell ${partName(st, a.id)} to the yard.`, run: (a) => sellPart(a.id) });
     registerIntent('sv-stow', { line: (a, st) => `I have the yard put ${partName(st, a.id)} in order and store it as a spare.`, run: (a) => stowPart(a.id) });

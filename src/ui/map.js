@@ -9,8 +9,9 @@ import { fuelMult } from '../systems/services.js';
 import { isDown } from '../systems/body.js';
 import { SECTOR_W, SECTOR_H, findRoute, factionById, SECURITY_LABELS, systemDistance } from '../systems/galaxy.js';
 import { blip } from './sfx.js';
-import { flyTo, placeOf } from '../systems/sites.js';
+import { flyTo, placeOf, knownSites } from '../systems/sites.js';
 import { registerIntent, intent } from '../core/intents.js';
+import { registerHear, readQty, readHours } from '../core/hear.js';
 
 let view = null;      // current viewBox { x, y, w, h }
 let selected = null;  // selected system id
@@ -278,6 +279,19 @@ export function initMap() {
         },
         run: (a) => { const r = jump(a.to); selected = a.to; return r; },
     });
+    // The same actions, heard in the player's own words.
+    registerHear({ id: 'jump', intent: 'map-jump', order: 90, verb: 'Jump to', what: 'Jump the ship (or book passage on a transport) to another star system', when: (st) => !st.transit && !st.custody && !st.cruise,
+        options: (st) => galaxy().adj[st.loc.system].map(l => ({ label: galaxy().systems[l.to].name, args: { to: l.to }, hint: `${l.d} ly` })),
+        args: (st, t, o) => o.args, re: /\b(jump|engage the drive|book (?:a )?(?:berth|passage))\b/i });
+    registerHear({ id: 'fly', intent: 'fly', order: 85, verb: 'Fly to', what: 'Fly (or take the ferry) to another station or a known site in this star system', when: (st) => !st.transit && !st.custody,
+        options: (st) => {
+            const sys = galaxy().systems[st.loc.system];
+            const here = st.loc.docked ? st.loc.station : null;
+            const stations = sys.stations.map((s, i) => (i === here ? null : { label: s.name, args: { ref: `st:${i}` } }));
+            const sites = st.ship ? knownSites(st).filter(s => s.id !== st.loc.site).map(s => ({ label: s.name, args: { ref: s.id } })) : [];
+            return [...stations, ...sites].filter(Boolean);
+        },
+        args: (st, t, o) => o.args, re: /\b(fly|ferry|shuttle|set (?:a )?course)\b[^.!?]{0,30}\bto\b/i });
     registerIntent('fly', {
         line: (a, st) => {
             const p = placeOf(st, a.ref);

@@ -19,6 +19,7 @@ import { registerPromptSection } from '../core/ailink.js';
 import { systemDistance, factionById } from '../systems/galaxy.js';
 import { blip } from './sfx.js';
 import { registerIntent, intent } from '../core/intents.js';
+import { registerHear, readQty, readHours } from '../core/hear.js';
 
 let sel = null;      // good open in the exchange
 let qty = 10;
@@ -341,6 +342,22 @@ export function initMarketUi() {
     registerIntent('port-ammo', { line: (a) => (a.key === 'all' ? 'I have the armourer refill every magazine.' : 'I have the armourer refill a magazine.'), run: (a) => restock(a.key) });
     registerIntent('yard-order', { line: (a, st) => `I book ${st.ship?.name ?? 'the ship'} into the repair yard${/^all/.test(a.kind) ? '' : ' for one job'}.`, run: (a) => orderYard(a.kind, a.id) });
     registerIntent('field', { line: () => 'I break out the spare parts and get to work on the ship.', run: (a) => fieldWork(a.kind, a.id) });
+    // The same actions, heard in the player's own words.
+    const rowsHere = (st) => { const p = tradingPost(st); return p ? marketAt(st, p.key) : []; };
+    registerHear({ id: 'buy', intent: 'mk-buy', order: 50, verb: 'Buy', what: 'Buy trade goods as cargo at the station market', when: (st) => !!tradingPost(st),
+        options: (st) => rowsHere(st).filter(r => r.stock > 0).map(r => ({ label: r.good.name.toLowerCase(), args: { id: r.good.id } })),
+        args: (st, t, o) => ({ id: o.args.id, qty: readQty(t, 1) }), label: (a) => `Buy ${a.qty} t ${goodName(a.id)}`,
+        re: /\b(buy|purchase|load up on)\b/i });
+    registerHear({ id: 'sell', intent: 'mk-sell', order: 50, verb: 'Sell', what: 'Sell cargo from the hold at the station market', when: (st) => !!tradingPost(st) && st.cargo.some(c => c.comId),
+        options: (st) => [...new Set(st.cargo.filter(c => c.comId).map(c => c.comId))].map(id => ({ label: goodName(id), args: { id } })),
+        args: (st, t, o) => ({ id: o.args.id, qty: readQty(t, holdOf(st, o.args.id)) }), label: (a) => `Sell ${a.qty} t ${goodName(a.id)}`,
+        re: /\b(sell|offload|unload)\b/i });
+    registerHear({ id: 'refuel', intent: 'port-buy', order: 55, verb: 'Refuel the ship', what: 'Refuel the ship at the station', when: (st) => !!st.ship && !!storePrices(st),
+        args: () => ({ kind: 'fuel', n: 1e9 }), re: /\b(refuel|top (?:up|off) the tanks|fill (?:her|it|the tanks) up)\b/i });
+    registerHear({ id: 'supplies', intent: 'port-buy', order: 55, repeat: true, verb: 'Load supplies', what: 'Buy food and life-support supplies for the ship', when: (st) => !!st.ship && !!storePrices(st),
+        args: (st, t) => ({ kind: 'supplies', n: readQty(t, 10) }), label: (a) => `Load ${a.n} crew-days of supplies`, re: /\b(provisions|supplies)\b/i });
+    registerHear({ id: 'wages', intent: 'pay-wages', order: 55, verb: 'Pay the crew', what: 'Pay the crew the wages they are owed', when: (st) => !!econ(st).owedWages,
+        args: () => ({}), re: /\bpay\b[^.!?]{0,20}\b(crew|wages)\b/i });
     registerIntent('pay-wages', { line: () => 'I pay the crew the wages they are owed.', run: () => payOwedWages() });
 
     const findGood = (name) => {

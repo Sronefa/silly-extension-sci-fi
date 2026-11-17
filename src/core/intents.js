@@ -132,10 +132,18 @@ function unqueue(id) {
     renderBar();
 }
 
+let note = '';
+/** A short status in the bar, such as "Reading your message…" while a send is being read. */
+export function setBarNote(text) {
+    note = text || '';
+    renderBar();
+}
+
 /** The queued actions, shown as chips just above the chat box until the message is sent. */
 function renderBar() {
     if (!bar) return;
-    bar.hidden = !queue.length;
+    bar.hidden = !queue.length && !note;
+    if (note && !queue.length) { bar.innerHTML = `<span class="sf-acts-head sf-thinking-note">${esc(note)}</span>`; return; }
     bar.innerHTML = queue.length
         ? `<span class="sf-acts-head">With this message</span>${queue.map(q => `<span class="sf-chip sf-chip-act" title="${esc(q.line)}">${esc(q.label)}<button type="button" class="sf-chip-x" data-unqueue="${q.id}" title="Take this action back">×</button></span>`).join('')}`
         : '';

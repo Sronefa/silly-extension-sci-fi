@@ -17,6 +17,7 @@ import { registerCommand, onTick, onArrival, fmtDuration } from '../systems/sim.
 import { registerPromptSection } from '../core/ailink.js';
 import { blip } from './sfx.js';
 import { registerIntent, intent } from '../core/intents.js';
+import { registerHear, readQty, readHours } from '../core/hear.js';
 
 const cr = (n) => `${fmtInt(n)} cr`;
 const RISK = ['Low risk', 'Some risk', 'Dangerous', 'Very dangerous'];
@@ -99,6 +100,12 @@ export function initContractsUi() {
         return contracts(st).find(x => x.id === id) ?? (p ? boardAt(st, p.key).find(x => x.id === id) : null) ?? (st.offers ?? []).find(x => x.id === id);
     };
     const what = (st, id) => { const c = find(st, id); return c ? `the ${(KINDS[c.kind]?.name ?? 'job').toLowerCase()} for ${c.client}` : 'the contract'; };
+    registerHear({ id: 'sign', intent: 'ct-accept', order: 50, verb: 'Sign for', what: 'Sign for a contract on the port office board', when: (st) => !!port(st) && areaOf(st) === 'office',
+        options: (st) => boardAt(st, port(st).key).map(c => ({ label: `${(KINDS[c.kind]?.name ?? 'job').toLowerCase()} for ${c.client}`, args: { id: c.id } })),
+        args: (st, t, o) => o.args, re: /\b(sign|accept|take)\b[^.!?]{0,20}\b(contract|job|haul|run|charter)\b/i });
+    registerHear({ id: 'deliver', intent: 'ct-deliver', order: 50, verb: 'Hand over', what: 'Hand over a contract\'s delivery and collect the pay', when: (st) => !!port(st) && activeContracts(st).length > 0,
+        options: (st) => activeContracts(st).map(c => ({ label: `${(KINDS[c.kind]?.name ?? 'job').toLowerCase()} for ${c.client}`, args: { id: c.id } })),
+        args: (st, t, o) => o.args, re: /\b(deliver|hand (?:over|in)|drop off)\b/i });
     registerIntent('ct-accept', { line: (a, st) => `I sign for ${what(st, a.id)} at the port office.`, run: (a) => accept(a.id) });
     registerIntent('ct-deliver', { line: (a, st) => `I hand over ${what(st, a.id)} and collect my pay.`, run: (a) => { const r = deliver(a.id); return `Paid ${cr(r.pay)}${r.late ? ' (late)' : ''}`; } });
     registerIntent('ct-abandon', { line: (a, st) => `I walk away from ${what(st, a.id)}.`, run: (a) => { abandon(a.id); return 'Contract abandoned'; } });

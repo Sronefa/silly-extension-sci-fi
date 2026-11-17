@@ -21,6 +21,7 @@ import { registerCommand, onTick, fmtDuration } from '../systems/sim.js';
 import { registerPromptSection } from '../core/ailink.js';
 import { blip } from './sfx.js';
 import { registerIntent, intent } from '../core/intents.js';
+import { registerHear, readQty, readHours } from '../core/hear.js';
 
 const cr = (n) => `${fmtInt(n)} cr`;
 let selRock = null;
@@ -228,6 +229,10 @@ export function initSpaceUi() {
 
     // What these buttons write into the chat, and what the game does when it is sent.
     const siteName = (st, id) => siteBook(st) && (sitesOf(st.seed, Number(String(id).split(':')[0])).find(s => s.id === id)?.name ?? 'the site');
+    registerHear({ id: 'survey', intent: 'sp-survey', order: 90, what: 'Run a sensor survey of the surrounding space with the ship', when: (st) => !!st.ship && !st.transit && !st.activity,
+        args: (st, t) => ({ h: readHours(t, 4) }), label: (a) => `Survey for ${a.h} h`, re: /\b(survey|sweep|scan the (?:area|system|region))\b/i });
+    registerHear({ id: 'mine', intent: 'mn-cut', order: 90, what: 'Start cutting ore with the mining lasers', when: (st) => canMine(st) && !!shipInField(st) && !st.activity,
+        args: (st, t) => ({ h: readHours(t, 4) }), label: (a) => `Mine for ${a.h} h`, re: /\b(mine|cut (?:the )?ore|start (?:the )?lasers)\b/i });
     registerIntent('sp-survey', { line: (a) => `I run a sensor survey of the area for ${a.h} hours.`, run: (a) => startSurvey(a.h) });
     registerIntent('sp-stop', { line: (a, st) => `I stop ${(st.activity?.name ?? 'what I am doing').toLowerCase()}.`, run: () => quit() });
     registerIntent('sp-chart', { line: (a) => `I buy the survey charts of ${galaxy()?.systems[a.sys]?.name ?? 'that system'} at the port office.`, run: (a) => buyChart(a.sys) });
