@@ -4,7 +4,7 @@ import { registerTab, registerWidget, registerActions, gauge, btn, ask, confirmA
 import { S, commit, addLog, fmtDate, locationLabel, cargoUsed, cargoCap, shipClass, currentSystem } from '../core/state.js';
 import { runCommand, runBlock, advanceTime, needStatuses } from '../systems/sim.js';
 import { esc, fmtInt, uid } from '../core/util.js';
-import { toast, toInput } from '../core/st.js';
+import { toast, toInput, gmOn } from '../core/st.js';
 import { NEEDS, SHIP_SYSTEMS, SHIP_WEAPONS, FACTIONS } from '../data/catalog.js';
 import { CRAFT_CLASSES } from '../data/chargen.js';
 import { hasFx } from '../systems/character.js';
@@ -33,7 +33,7 @@ function defineWidgets() {
             <div class="sf-loc-sub"><span style="color:${fac.color}">${esc(fac.name)}</span> · ${SECURITY_LABELS[sys.security]} security · ${esc(sys.star.label)}</div>
             <div class="sf-actions">
                 ${btn('edit', 'Set location', { icon: 'fa-pen', data: { cmd: 'location', label: 'Where are you? (leave empty to clear)', text: '1' } })}
-                ${st.loc.docked ? btn('run', 'Undock', { icon: 'fa-arrow-up-from-bracket', data: { cmd: 'undock' } }) : btn('run', 'Dock', { icon: 'fa-anchor', data: { cmd: 'dock' } })}
+                ${st.loc.docked ? (!st.ship && !gmOn() ? '' : btn('run', 'Undock', { icon: 'fa-arrow-up-from-bracket', data: { cmd: 'undock' } })) : btn('run', 'Dock', { icon: 'fa-anchor', data: { cmd: 'dock' } })}
             </div>
             <div class="sf-alert-row">${alertBtn('green', 'Green')}${alertBtn('yellow', 'Yellow')}${alertBtn('red', 'Red alert')}</div>`;
         },
@@ -93,7 +93,7 @@ function defineWidgets() {
     });
     registerWidget({
         id: 'clock', title: () => 'Clock',
-        render: (st) => `<div class="sf-clock">${esc(fmtDate(st.minutes))}</div><div class="sf-actions">
+        render: (st) => `<div class="sf-clock">${esc(fmtDate(st.minutes))}</div>${gmOn() ? '' : '<small class="sf-dim">Time passes as you play. To let a longer stretch go by, use the hourglass in the chat bar.</small>'}<div class="sf-actions">
             ${btn('run', '+10 min', { icon: 'fa-clock', data: { cmd: 'time +10m' } })}
             ${btn('run', '+30 min', { icon: 'fa-clock', data: { cmd: 'time +30m' } })}
             ${btn('run', '+1 h', { icon: 'fa-clock', data: { cmd: 'time +1h' } })}
@@ -161,10 +161,11 @@ function defineWidgets() {
         },
     });
     registerWidget({
-        id: 'console', title: () => 'Command console',
-        render: () => `<div class="sf-console"><span>&gt;</span><input class="sf-input sf-console-in" placeholder="hull -20; time +2h; cargo add &quot;Water&quot; 5" autocomplete="off" autocapitalize="off"></div>
+        id: 'console',
+        title: () => (gmOn() ? 'Command console' : 'Log tools'),
+        render: () => `${gmOn() ? '<div class="sf-console"><span>&gt;</span><input class="sf-input sf-console-in" placeholder="hull -20; time +2h; cargo add &quot;Water&quot; 5" autocomplete="off" autocapitalize="off"></div>' : ''}
             <div class="sf-actions">${btn('console-run', 'Execute', { icon: 'fa-terminal', cls: 'primary' })}${btn('log-add', 'Log entry', { icon: 'fa-pen' })}${btn('status-to-chat', 'Status to chat', { icon: 'fa-share' })}</div>
-            <small class="sf-dim">Same commands the AI uses. Separate several with a semicolon.</small>`,
+            ${gmOn() ? '<small class="sf-dim">Game master mode: the same commands the AI uses, without its limits. Separate several with a semicolon.</small>' : ''}`,
     });
     registerWidget({
         id: 'shiplog', title: () => "Ship's log",

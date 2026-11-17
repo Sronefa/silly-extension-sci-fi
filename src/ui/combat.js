@@ -1,7 +1,7 @@
 // Combat screen, body display with treatment, daily activities, and the encounter starter.
 import { registerTab, registerWidget, registerActions, gauge, btn, openHud, redraw } from './hud.js';
 import { S, commit, onChange, addLog } from '../core/state.js';
-import { toast, ctx, settings } from '../core/st.js';
+import { toast, ctx, settings, gmOn } from '../core/st.js';
 import { esc } from '../core/util.js';
 import { BODY_PARTS, partDef, WOUND_TYPES, WEAPONS, ARMOR, MEDS, ENEMIES, COVER_NAMES, BAND_NAMES } from '../data/combat.js';
 import {
@@ -240,7 +240,7 @@ export function initCombatUi() {
         },
     });
     registerWidget({
-        id: 'encounter', when: (st) => !st.combat, title: () => 'Start a fight', render: () => `<small class="sf-dim">The AI starts fights on its own with a tag. Use this to stage one yourself.</small>
+        id: 'encounter', when: (st) => !st.combat && gmOn(), title: () => 'Start a fight', render: () => `<small class="sf-dim">The AI starts fights on its own with a tag. Use this to stage one yourself.</small>
             <label class="sf-field"><span>Where</span><input class="sf-input" data-enc="scene" value="Cargo bay" placeholder="corridor, bar, street, bridge…"></label>
             <div class="sf-check-form">
                 <select class="sf-input" data-enc="type">${Object.values(ENEMIES).map(e => `<option value="${e.id}"${e.id === 'pirate' ? ' selected' : ''}>${esc(e.name)}</option>`).join('')}</select>

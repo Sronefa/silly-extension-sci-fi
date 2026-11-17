@@ -1,6 +1,6 @@
 // The HUD shell: floating launcher, status strip above the chat, and the tabbed panel.
 // Feature modules register tabs and click actions here; the shell owns layout and redraws.
-import { ctx, settings, saveSettings, hasChat, toast } from '../core/st.js';
+import { ctx, settings, saveSettings, hasChat, toast, gmOn } from '../core/st.js';
 import { S, onChange, fmtDate, locationLabel } from '../core/state.js';
 import { esc, pct, gaugeClass, fmtInt, debounce } from '../core/util.js';
 import { needStatuses } from '../systems/sim.js';
@@ -136,7 +136,23 @@ export function panel(title, body, extra = '') {
     return `<section class="sf-panel"><h3 class="sf-panel-title"><span>${esc(title)}</span>${extra}</h3><div class="sf-panel-body">${body}</div></section>`;
 }
 
+// ---- Game master mode ----
+// Hand edits, free time and staged fights are repair tools, not play. With the mode off they are
+// hidden and refused, so the only way to change the world is to act in it.
+const GM_ACTIONS = new Set(['stack', 'stack-new', 'mission-add', 'mission', 'injury-add', 'injury-heal', 'vitals-stable', 'vitals-die', 'crew-add', 'crew-remove', 'console-run', 'enc-start', 'sc-start']);
+const FREE_EDITS = /^(tracker|contact)\b/i;
+const GM_RUN = /^(time|location|dock)\b/i;
+
+/** Whether a control is a game master tool. */
+export function isGmAction(action, data = {}) {
+    if (GM_ACTIONS.has(action)) return true;
+    if (action === 'edit') return !FREE_EDITS.test(String(data.cmd ?? ''));
+    if (action === 'run') return GM_RUN.test(String(data.cmd ?? '').trim());
+    return false;
+}
+
 export function btn(action, label, { icon = '', cls = '', data = {}, disabled = false, title = '' } = {}) {
+    if (isGmAction(action, data)) cls = `${cls} sf-gm-only`.trim();
     const d = Object.entries(data).map(([k, v]) => ` data-${k}="${esc(v)}"`).join('');
     return `<button type="button" class="sf-btn ${cls}" data-sf="${action}"${d}${disabled ? ' disabled' : ''}${title ? ` title="${esc(title)}"` : ''}>${icon ? `<i class="fa-solid ${icon}"></i>` : ''}${label ? `<span>${esc(label)}</span>` : ''}</button>`;
 }
@@ -238,6 +254,7 @@ function renderStrip() {
 function applyBodyState() {
     const st = S();
     const cfg = settings();
+    document.body.classList.toggle('sf-gm', !!cfg.gmMode);
     document.body.classList.toggle('sf-red-alert', !!(cfg.enabled && cfg.redAlert && st?.alert === 'red'));
     document.body.classList.toggle('sf-yellow-alert', !!(cfg.enabled && cfg.redAlert && st?.alert === 'yellow'));
 }
@@ -282,6 +299,11 @@ function onClick(ev) {
     const fn = actions[name];
     if (!fn) return;
     ev.preventDefault();
+    if (!gmOn() && isGmAction(name, el.dataset)) {
+        // A plain click on an editable number does nothing in play; a button says why.
+        if (el.tagName === 'BUTTON') toast('info', 'That is a game master tool. Turn on game master mode in the Ship-OS settings to use it.');
+        return;
+    }
     blip('click');
     Promise.resolve(fn(el, ev)).catch(e => {
         console.error('[Ship-OS] action failed', name, e);

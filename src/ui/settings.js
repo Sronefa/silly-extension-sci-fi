@@ -89,6 +89,9 @@ export function initSettings() {
             ${check('tracker', 'Tracker pass: a model reads each reply and updates the state', 'One extra call per AI reply. Works together with, or instead of, the hidden tags written by the story model')}
             ${check('loreAgent', 'Lorebook agent: keeps a campaign lorebook up to date', 'Creates, updates, merges and switches entries in a lorebook bound to this chat')}
             <label>Lorebook agent runs every <input type="number" class="text_pole" min="1" max="50" data-sfs="loreEvery"> AI replies</label>
+            <h4>Game master</h4>
+            ${check('gmMode', 'Game master mode', 'Shows the hand-edit tools: click any number to change it, the clock buttons, staged fights, the command console and /sf commands. A repair tool for a broken state; leave it off to play.')}
+            <small class="sf-dim">Off in normal play: the world changes only through what your character does. Turn it on to fix a broken state.</small>
             <h4>Campaign in this chat</h4>
             <div class="flex-container">
                 <div class="menu_button" id="sf-export">Export save</div>

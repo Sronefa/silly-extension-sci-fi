@@ -44,7 +44,12 @@ export const DEFAULT_SETTINGS = {
     tracker: false,
     loreAgent: false,
     loreEvery: 6,
+    // Game master mode: hand edits, free time, the command console. Off in normal play.
+    gmMode: false,
 };
+
+/** True when game master mode is on: numbers can be edited by hand and any command run. */
+export const gmOn = () => !!settings().gmMode;
 
 export function settings() {
     const c = ctx();

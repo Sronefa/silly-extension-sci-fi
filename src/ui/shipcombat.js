@@ -3,7 +3,7 @@
 // gets no tactical picture at all, only what they can feel.
 import { registerTab, registerWidget, registerActions, gauge, btn, openHud, redraw, confirmAsk } from './hud.js';
 import { S, commit, onChange, addLog } from '../core/state.js';
-import { toast, ctx, settings } from '../core/st.js';
+import { toast, ctx, settings, gmOn } from '../core/st.js';
 import { esc, clamp, fmtInt } from '../core/util.js';
 import { SIZES, SC_WEAPONS, ARC_NAMES, ROOMS, VESSELS, POSTS, THROTTLES, POWER_PRESETS, TRACK_NAMES, PULSE_SECONDS, sensorGrade, GRADE_NAMES, LOADS, loadsFor, STYLES, FAMILIES, LEGAL, hullAccess } from '../data/vessels.js';
 import {
@@ -368,7 +368,7 @@ export function initShipCombatUi() {
     registerWidget({ id: 'scaar', when: (st) => !st.shipCombat && !!st.lastShipCombat, title: () => 'After-action report', render: aarHtml });
     registerWidget({ id: 'posting', when: (st) => !!playerPost(st) && !(st.ship && !st.post), title: () => 'Posting', render: postingHtml });
     registerWidget({
-        id: 'scstart', when: (st) => !st.shipCombat && !st.combat && clearance(st) >= 0, title: () => 'Stage a space battle',
+        id: 'scstart', when: (st) => !st.shipCombat && !st.combat && clearance(st) >= 0 && gmOn(), title: () => 'Stage a space battle',
         render: () => `<small class="sf-dim">The AI starts battles with a tag. Use this to stage one yourself.</small>
             <div class="sf-check-form"><select class="sf-input" data-scs="cls">${Object.values(VESSELS).filter(v => !v.decoy).map(v => `<option value="${v.id}"${v.id === 'raider' ? ' selected' : ''}>${esc(v.name)}</option>`).join('')}</select>
             <select class="sf-input" data-scs="n">${[1, 2, 3, 4, 6].map(n => `<option>${n}</option>`).join('')}</select></div>

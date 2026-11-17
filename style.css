@@ -161,8 +161,10 @@ body.sf-hud-open #sf-fab { opacity: 0.55; }
 .sf-gauge.info { --g: var(--sf-info); }
 .sf-gauge.crit > span { animation: sf-pulse 1s infinite; }
 @keyframes sf-pulse { 50% { opacity: 0.45; } }
-.sf-editable { cursor: pointer; }
-.sf-editable:hover { background: rgba(var(--sf-accent-rgb), 0.08); }
+body.sf-gm .sf-editable { cursor: pointer; }
+body.sf-gm .sf-editable:hover { background: rgba(var(--sf-accent-rgb), 0.08); }
+/* Game master tools are only shown while game master mode is on. */
+body:not(.sf-gm) .sf-gm-only { display: none !important; }
 
 .sf-btn {
     display: inline-flex;
