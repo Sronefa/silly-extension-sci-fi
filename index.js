@@ -9,11 +9,12 @@ import { initContractsUi } from './src/ui/contracts.js';
 import { initSpaceUi } from './src/ui/space.js';
 import { initSalvageUi } from './src/ui/salvage.js';
 import { initTimeBar } from './src/ui/timebar.js';
+import { initIntents, onQueued } from './src/core/intents.js';
 import { settings, on } from './src/core/st.js';
 import { S, migrate, notify } from './src/core/state.js';
 import { initAiLink, refreshPrompt } from './src/core/ailink.js';
 import { initSlash } from './src/core/slash.js';
-import { initHud, redraw, setScreens, registerActions } from './src/ui/hud.js';
+import { initHud, redraw, setScreens, registerActions, closeHud } from './src/ui/hud.js';
 import { initSheet } from './src/ui/sheet.js';
 import { wizardApi, wizardActions } from './src/ui/chargen.js';
 import { initCombatUi } from './src/ui/combat.js';
@@ -47,6 +48,9 @@ function start() {
         initAgentsUi();
         initHud();
         initTimeBar();
+        initIntents();
+        // On a phone the console covers the chat: close it so the line just written is in sight.
+        onQueued(() => { if (window.matchMedia('(max-width: 1000px)').matches) closeHud(); });
         initSettings();
         initSlash();
         initAiLink();

@@ -9,7 +9,8 @@ import { fuelMult } from '../systems/services.js';
 import { isDown } from '../systems/body.js';
 import { SECTOR_W, SECTOR_H, findRoute, factionById, SECURITY_LABELS, systemDistance } from '../systems/galaxy.js';
 import { blip } from './sfx.js';
-import { flyTo } from '../systems/sites.js';
+import { flyTo, placeOf } from '../systems/sites.js';
+import { registerIntent, intent } from '../core/intents.js';
 
 let view = null;      // current viewBox { x, y, w, h }
 let selected = null;  // selected system id
@@ -209,33 +210,31 @@ function mount(body) {
     svg.addEventListener('click', (e) => { if (moved > 6) { e.stopPropagation(); e.preventDefault(); } }, true);
 }
 
-export function doJump() {
+/** Engages the jump to the next system on the course. Throws if the ship or purse cannot. */
+function jump(toId) {
     const st = S();
     const g = galaxy();
-    if (st.transit) return toast('warning', 'Already in transit.');
-    if (st.custody) return toast('warning', st.custody.type === 'prison' ? 'You are in prison.' : 'You are not free to go anywhere.');
-    if (st.dead || st.combat || isDown(st.captain)) return toast('warning', 'You are in no state to travel.');
-    if (st.route.length < 2) return toast('warning', 'No course laid in.');
-    const to = g.systems[st.route[1]];
+    if (st.transit) throw new Error('already in transit');
+    if (st.custody) throw new Error(st.custody.type === 'prison' ? 'you are in prison' : 'you are not free to go anywhere');
+    if (st.dead || st.combat || isDown(st.captain)) throw new Error('you are in no state to travel');
+    const to = g.systems[toId];
+    if (!to || toId === st.loc.system) throw new Error('no course laid in');
     const cost = jumpCost(st, st.loc.system, to.id);
     const from = g.systems[st.loc.system];
     if (st.ship) {
-        if (st.ship.systems.engines <= 0) { blip('error'); return toast('error', 'Engines are offline. Repairs required.'); }
-        if (st.ship.fuel < cost.fuel) { blip('error'); return toast('error', `Insufficient fuel: ${cost.fuel} needed.`); }
+        if (st.ship.systems.engines <= 0) throw new Error('engines are offline: repairs required');
+        if (st.ship.fuel < cost.fuel) throw new Error(`not enough fuel: ${cost.fuel} needed`);
         st.ship.fuel = Math.round((st.ship.fuel - cost.fuel) * 10) / 10;
     } else {
-        if (st.captain.credits < cost.fare) { blip('error'); return toast('error', `A berth costs ${cost.fare} cr.`); }
+        if (st.captain.credits < cost.fare) throw new Error(`a berth costs ${cost.fare} cr`);
         st.captain.credits -= cost.fare;
     }
     beginTransit(to.id, cost.hours, { passenger: !st.ship });
-    selected = to.id;
     addLog(st.ship
         ? `Jump engaged: ${from.name} to ${to.name} (${cost.d} ly, ${cost.fuel} fuel, about ${cost.hours} h in transit).`
         : `Boarded a transport from ${from.name} to ${to.name} (${cost.fare} cr, about ${cost.hours} h).`, 'nav');
     st.pendingEvent = `${st.ship ? `The ${st.ship.name} has just entered jump` : `${st.captain.name} has just boarded a passenger transport, which has entered jump`} from ${from.name} toward ${to.name}. The transit takes about ${cost.hours} hours of ship time and is lived, not skipped: life aboard goes on.`;
-    blip('jump');
-    commit('jump');
-    toast('success', `Jump engaged. ${cost.hours} h to ${to.name}.`);
+    return st.ship ? `Jump engaged: ${cost.hours} h to ${to.name}` : `Berth to ${to.name}: ${cost.fare} cr, ${cost.hours} h`;
 }
 
 export function initMap() {
@@ -255,12 +254,13 @@ export function initMap() {
             commit('route');
         },
         'map-clear'() { S().route = []; commit('route'); },
-        'map-jump'() { doJump(); },
-        'map-dock'(el) {
-            // Getting to another station takes a flight (or the ferry), not a jump cut.
-            try { toast('success', flyTo(`st:${el.dataset.idx}`)); } catch (e) { toast('warning', e.message); }
-            commit('dock');
+        'map-jump'() {
+            const st = S();
+            if (st.route.length < 2) return toast('warning', 'No course laid in.');
+            intent('map-jump', { to: st.route[1] });
         },
+        // Getting to another station takes a flight (or the ferry), not a jump cut.
+        'map-dock'(el) { intent('fly', { ref: `st:${el.dataset.idx}` }); },
         async 'map-note'() {
             const st = S();
             const id = selected ?? st.loc.system;
@@ -270,5 +270,20 @@ export function initMap() {
             else delete st.sysNotes[id];
             commit('note');
         },
+    });
+    registerIntent('map-jump', {
+        line: (a, st) => {
+            const to = galaxy().systems[a.to]?.name ?? 'the next system';
+            return st.ship ? `I take ${st.ship.name} into jump for ${to}.` : `I buy a berth on a transport bound for ${to}.`;
+        },
+        run: (a) => { const r = jump(a.to); selected = a.to; return r; },
+    });
+    registerIntent('fly', {
+        line: (a, st) => {
+            const p = placeOf(st, a.ref);
+            const name = p?.name ?? 'there';
+            return st.ship ? `I fly ${st.ship.name} over to ${name}.` : `I catch the ferry to ${name}.`;
+        },
+        run: (a) => flyTo(a.ref),
     });
 }

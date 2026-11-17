@@ -19,14 +19,11 @@ import { registerCommand, onTick, onArrival, advanceTime, fmtDuration, isAiComma
 import { registerPromptSection } from '../core/ailink.js';
 import { galaxy } from '../core/state.js';
 import { blip } from './sfx.js';
+import { registerIntent, intent } from '../core/intents.js';
 
 let openOffer = null;
 const cr = (n) => `${fmtInt(n)} cr`;
 
-function act(fn) {
-    try { const text = fn(); if (text) toast('success', text); blip('click'); } catch (e) { toast('warning', e.message); blip('error'); }
-    commit('life');
-}
 
 /** The commitment card: what is booked or under way, and how far along it is. */
 function activityHtml(st) {
@@ -250,17 +247,17 @@ export function initLifeUi() {
     registerTab({ id: 'station', label: 'Station', icon: 'fa-building', order: 25, when: free, widgets: ['whereabouts', 'jobs', 'bank', 'licences', 'shipyard', 'parking'] });
 
     registerActions({
-        'life-work'(el) { act(() => takeShift(el.dataset.id)); },
-        'area-go'(el) { act(() => moveTo(el.dataset.id)); },
-        'act-start'() { act(() => clockIn()); },
-        async 'act-quit'() { const a = S().activity; if (a && (!a.on || await confirmAsk('Walk out?', 'You lose what is left of it.'))) act(() => quit()); },
-        'life-live'(el) { act(() => living(el.dataset.kind)); },
-        'life-enrol'(el) { act(() => enrol(el.dataset.id)); },
-        'life-course'() { act(() => courseStep()); },
+        'life-work'(el) { intent('life-work', { id: el.dataset.id }); },
+        'area-go'(el) { intent('area-go', { id: el.dataset.id }); },
+        'act-start'() { intent('act-start'); },
+        async 'act-quit'() { const a = S().activity; if (a && (!a.on || await confirmAsk('Walk out?', 'You lose what is left of it.'))) intent('act-quit'); },
+        'life-live'(el) { intent('life-live', { kind: el.dataset.kind }); },
+        'life-enrol'(el) { intent('life-enrol', { id: el.dataset.id }); },
+        'life-course'() { intent('life-course'); },
         async 'life-borrow'(el) {
             const v = await ask(`Borrow how much? (up to ${fmtInt(el.dataset.max)} cr)`, el.dataset.max);
             const n = Number(String(v ?? '').replace(/[^\d.]/g, ''));
-            if (n) act(() => takeLoan(el.dataset.lender, n));
+            if (n) intent('life-borrow', { lender: el.dataset.lender, n });
         },
         async 'life-repay'(el) {
             const st = S();
@@ -268,21 +265,51 @@ export function initLifeUi() {
             if (!loan) return;
             const v = await ask(`Pay how much toward ${fmtInt(loan.balance)} cr?`, String(Math.min(Math.ceil(loan.balance), Math.floor(st.captain.credits))));
             const n = Number(String(v ?? '').replace(/[^\d.]/g, ''));
-            if (n) act(() => repay(loan.id, n));
+            if (n) intent('life-repay', { id: loan.id, n });
         },
         'yard-open'(el) { openOffer = openOffer === el.dataset.id ? null : el.dataset.id; commit('ui'); },
-        'yard-inspect'(el) { act(() => inspect(el.dataset.id, el.dataset.how)); },
+        'yard-inspect'(el) { intent('yard-inspect', { id: el.dataset.id, how: el.dataset.how }); },
         async 'yard-buy'(el) {
             const name = await ask('Name her', '');
             if (name === null || name === undefined || name === false) return;
-            act(() => buyShip(el.dataset.id, { finance: el.dataset.fin === '1', name: String(name).trim() }));
+            intent('yard-buy', { id: el.dataset.id, finance: el.dataset.fin === '1', name: String(name).trim() });
             openOffer = null;
         },
-        async 'yard-sell'() { if (await confirmAsk('Sell your ship?', 'This cannot be undone.')) act(() => sellShip()); },
-        'park'(el) { act(() => layUp(el.dataset.mode)); },
-        'park-reclaim'() { act(() => reclaim()); },
-        'custody'(el) { act(() => custodyAct(el.dataset.a, advanceTime)); },
+        async 'yard-sell'() { if (await confirmAsk('Sell your ship?', 'This cannot be undone once the message is sent and answered.')) intent('yard-sell'); },
+        'park'(el) { intent('park', { mode: el.dataset.mode }); },
+        'park-reclaim'() { intent('park-reclaim'); },
+        'custody'(el) { intent('custody', { a: el.dataset.a }); },
     });
+
+    // What these buttons write into the chat, and what the game does when it is sent.
+    const shipName = (st) => st.ship?.name ?? 'my ship';
+    const offer = (st, id) => { const y = yardStock(st); return y ? [...y.new, ...y.used].find(o => o.id === id) : null; };
+    const offerName = (st, id) => { const o = offer(st, id); return o ? `${o.used ? 'used ' : ''}${o.cls?.name ?? 'ship'}` : 'ship'; };
+    const LIVE = { meal: 'I buy a hot meal at a food stall and eat it.', bunk: 'I rent a capsule bunk for the night.', room: 'I take a private room for the night.' };
+    const CUSTODY = {
+        eat: (c) => (c.type === 'prison' ? 'I eat in the mess hall.' : 'I eat what I am given.'),
+        work: (c) => (c.type === 'prison' ? 'I go out on the work detail.' : 'I begin the day\'s work.'),
+        fight: () => 'I step into the pit for my bout.',
+        join: () => 'I ask to join the crew.',
+        buy: () => 'I offer to buy my freedom.',
+        defy: () => 'I defy them.',
+        escape: () => 'I try to escape.',
+    };
+    registerIntent('life-work', { line: (a, st) => `I take the ${(jobBoard(st).find(j => j.id === a.id)?.name ?? 'job').toLowerCase()} shift off the job board.`, run: (a) => takeShift(a.id) });
+    registerIntent('area-go', { line: (a, st) => `I walk to the ${areaName(st, a.id).toLowerCase()}.`, run: (a) => moveTo(a.id) });
+    registerIntent('act-start', { line: (a, st) => `I get started: ${(st.activity?.name ?? 'the work').toLowerCase()}.`, run: () => clockIn() });
+    registerIntent('act-quit', { line: (a, st) => (st.activity?.on ? `I walk out of ${(st.activity?.name ?? 'it').toLowerCase()}.` : `I call off ${(st.activity?.name ?? 'what I had booked').toLowerCase()}.`), run: () => quit() });
+    registerIntent('life-live', { line: (a) => LIVE[a.kind] ?? `I pay for ${(LIVING[a.kind]?.name ?? a.kind).toLowerCase()}.`, run: (a) => living(a.kind) });
+    registerIntent('life-enrol', { line: (a) => `I enrol for the ${LICENCES[a.id]?.name ?? 'licence'} course at the flight school.`, run: (a) => enrol(a.id) });
+    registerIntent('life-course', { line: () => 'I go to the flight school for the next part of my course.', run: () => courseStep() });
+    registerIntent('life-borrow', { line: (a) => `I sign for a loan of ${cr(a.n)} with the ${(LENDERS[a.lender]?.name ?? 'lender').replace(/^./, c => c.toLowerCase())}.`, run: (a) => takeLoan(a.lender, a.n) });
+    registerIntent('life-repay', { line: (a, st) => `I pay ${cr(a.n)} toward my loan${(() => { const l = loans(st).find(x => x.id === a.id); return l ? ` with the ${LENDERS[l.lender]?.name ?? 'lender'}` : ''; })()}.`, run: (a) => repay(a.id, a.n) });
+    registerIntent('yard-inspect', { line: (a, st) => (a.how === 'pay' ? `I pay a surveyor to go over the ${offerName(st, a.id)}.` : `I go over the ${offerName(st, a.id)} myself before I decide.`), run: (a) => inspect(a.id, a.how) });
+    registerIntent('yard-buy', { line: (a, st) => `I buy the ${offerName(st, a.id)}${a.finance ? ' on finance' : ''}${a.name ? ` and name her ${a.name}` : ''}.`, run: (a) => buyShip(a.id, { finance: a.finance, name: a.name }) });
+    registerIntent('yard-sell', { line: (a, st) => `I sell ${shipName(st)} to the shipyard.`, run: () => sellShip() });
+    registerIntent('park', { line: (a, st) => `I lay ${shipName(st)} up in ${a.mode === 'hangar' ? 'a locked hangar' : 'an open pad'}.`, run: (a) => layUp(a.mode) });
+    registerIntent('park-reclaim', { line: (a, st) => `I go to take ${st.laidUp?.ship?.name ?? 'my ship'} back.`, run: () => reclaim() });
+    registerIntent('custody', { line: (a, st) => (CUSTODY[a.a] ?? (() => 'I wait.'))(st.custody ?? {}), run: (a) => custodyAct(a.a, advanceTime) });
 
     registerCommand('area', (st, args) => moveTo(args.join(' '), { ai: isAiCommand() }), ['goto', 'walk']);
     registerCommand('arrest', (st, [days = '30', ...why]) => {

@@ -905,3 +905,12 @@ body.sf-theme ::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.25); }
 .sf-time-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .sf-time-row .sf-btn { padding: 4px 10px; min-height: 0; }
 .sf-time-in { flex: 1 1 120px; min-width: 0; margin: 0; }
+
+/* Actions through the chat: chips above the chat box until sent, and under the sent message. */
+#sf-acts { margin: 0 6px 4px; padding: 4px 6px; align-items: center; background: rgba(var(--sf-accent-rgb), 0.05); border: 1px dashed var(--sf-line); }
+#sf-acts[hidden] { display: none; }
+.sf-acts-head { font: 10px var(--sf-font-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--sf-dim); margin-right: 4px; }
+.sf-chip-act { display: inline-flex; align-items: center; gap: 4px; }
+.sf-chip-act.bad { color: var(--sf-warn, #e0a040); border-color: currentColor; }
+.sf-chip-x { padding: 0 3px; margin: 0; font: 13px/1 var(--sf-font-mono); color: inherit; background: none; border: 0; cursor: pointer; opacity: 0.7; }
+.sf-chip-x:hover { opacity: 1; color: var(--sf-red, #ff5a5a); }

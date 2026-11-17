@@ -13,6 +13,7 @@ import { skillCheck, skillOf, gainXp } from '../systems/character.js';
 import { advanceTime, registerCommand, runCommand, transitInfo, fmtDuration } from '../systems/sim.js';
 import { registerPromptSection } from '../core/ailink.js';
 import { blip } from './sfx.js';
+import { registerIntent, intent } from '../core/intents.js';
 
 let target = null;      // selected enemy unit id
 let called = '';        // called shot body part
@@ -296,21 +297,7 @@ export function initCombatUi() {
                 if (sheet !== st.captain) return toast('warning', 'In a fight you can only treat yourself.');
                 return act(() => playerActions.treat(med.id, selPart));
             }
-            const medic = [st.captain, ...st.crew].filter(p => !isDown(p)).sort((a, b) => skillOf(b, 'medicine') - skillOf(a, 'medicine'))[0] ?? st.captain;
-            const r = useMed(sheet, med.id, selPart, st.captain.inventory, {
-                now: st.minutes,
-                surgeryRoll: () => {
-                    const roll = skillCheck(medic, 'medicine', 14, { now: st.minutes });
-                    toast(roll.success ? 'success' : 'warning', `${medic.name} Medicine ${roll.total} vs 14`);
-                    return roll.success;
-                },
-            });
-            if (!r.ok) { blip('error'); return toast('warning', r.text); }
-            if (med.time) advanceTime(med.time);
-            gainXp(medic, 'medicine', med.surgery ? 12 : 4);
-            addLog(`${sheet.name}: ${r.text}`, 'sys');
-            toast(r.failed ? 'warning' : 'success', r.text);
-            commit('treat');
+            intent('treat', { med: med.id, part: selPart, who: bodyWho });
         },
         'enc-start'(el) {
             const box = el.closest('.sf-panel-body');
@@ -318,6 +305,33 @@ export function initCombatUi() {
             const r = runCommand(`combat "${String(get('scene') || 'Unknown ground').replace(/"/g, "'")}" ${get('type')} ${get('count')}`);
             if (!r.ok) { blip('error'); return toast('warning', r.text); }
             commit('combat');
+        },
+    });
+
+    // Treating wounds outside a fight goes through the chat like any other action.
+    const whoSheet = (st, who) => (who === 'pc' ? st.captain : st.crew.find(c => c.id === who) ?? st.captain);
+    registerIntent('treat', {
+        line: (a, st) => {
+            const sheet = whoSheet(st, a.who);
+            const where = (partDef(a.part)?.name ?? a.part).toLowerCase();
+            return `${sheet === st.captain ? 'I treat my' : `I treat ${sheet.name}'s`} ${where} with ${(MEDS[a.med]?.name ?? 'what I have').toLowerCase()}.`;
+        },
+        run: (a) => {
+            const st = S();
+            const med = MEDS[a.med];
+            if (!med) throw new Error('unknown treatment');
+            const sheet = whoSheet(st, a.who);
+            const medic = [st.captain, ...st.crew].filter(p => !isDown(p)).sort((x, y) => skillOf(y, 'medicine') - skillOf(x, 'medicine'))[0] ?? st.captain;
+            let roll = null;
+            const r = useMed(sheet, med.id, a.part, st.captain.inventory, {
+                now: st.minutes,
+                surgeryRoll: () => { roll = skillCheck(medic, 'medicine', 14, { now: st.minutes }); return roll.success; },
+            });
+            if (!r.ok) throw new Error(r.text);
+            if (med.time) advanceTime(med.time);
+            gainXp(medic, 'medicine', med.surgery ? 12 : 4);
+            addLog(`${sheet.name}: ${r.text}`, 'sys');
+            return `${roll ? `${medic.name} Medicine ${roll.total} vs 14. ` : ''}${r.text}`;
         },
     });
 

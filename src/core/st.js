@@ -44,6 +44,9 @@ export const DEFAULT_SETTINGS = {
     tracker: false,
     loreAgent: false,
     loreEvery: 6,
+    // Panel actions write a line into the chat box and happen when the message is sent.
+    chatActions: true,
+    actionStars: true,
     // Game master mode: hand edits, free time, the command console. Off in normal play.
     gmMode: false,
 };

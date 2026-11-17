@@ -5,6 +5,8 @@ import { S, commit, snapshot, rollbackTo, fmtDate, locationLabel, cargoUsed, car
 import { runBlock, needStatuses, transitInfo, fmtDuration, advanceTime, setAiTimeBudget, passMinutes, aiTimeLeft, aiCreditsLeft } from '../systems/sim.js';
 import { estimateMinutes, grantPrompt, grantLine, passTime, pendingAsk, pendingAsleep, setPendingAsk, takeTypedAsk } from '../systems/clock.js';
 import { toast } from './st.js';
+import { takeQueue, runIntent, cutLine, intentPrompt } from './intents.js';
+import { confirmAsk } from '../ui/hud.js';
 import { fmtInt } from './util.js';
 import { NEEDS, SHIP_SYSTEMS, FACTIONS, SHIP_WEAPONS, PERSONAL_WEAPONS, ARMORS } from '../data/catalog.js';
 import { ATTRIBUTES, SKILL_DEFS, TRAITS, FLAWS, CYBERWARE, CRAFT_CLASSES } from '../data/chargen.js';
@@ -170,6 +172,8 @@ export function buildNow(st = S(), sec = st && sections(st), nudge = true) {
     L.push(...sec.now);
     if (st.lastCheck) L.push(`SKILL CHECK, narrate this outcome and do not change it: ${st.lastCheck.text}`);
     if (st.pendingEvent) L.push(`EVENT TO NARRATE NOW: ${st.pendingEvent}`);
+    const acts = intentPrompt(st);
+    if (acts) L.push(acts);
     const grant = grantPrompt(st);
     if (grant) L.push(grant);
     else if (nudge && settings().aiCommands) L.push('End your reply with the <sf> block, including how long it took.');
@@ -285,9 +289,10 @@ function processMessage(mesId, type = '') {
     snapshot(mesId);
     // Any AI reply has narrated whatever event or check was queued, so they are consumed.
     const cur = S();
-    if (cur.pendingEvent || cur.lastCheck) {
+    if (cur.pendingEvent || cur.lastCheck || cur.lastActs) {
         cur.pendingEvent = null;
         cur.lastCheck = null;
+        cur.lastActs = null;
         commit('consumed');
     }
     // A stretch the player asked for has already been put on the clock; this reply narrates it.
@@ -380,8 +385,9 @@ export function autoTime(text = '') {
 }
 
 /**
- * The player's own message. If it carries a request for time to pass (picked from the chat bar
- * or typed as [+2h] at the end), the game decides how much really passes before the reply.
+ * The player's own message. It may carry actions queued from the panel, and a request for time
+ * to pass (picked from the chat bar or typed as [+2h] at the end). The engine carries them out
+ * before the reply, so the storyteller narrates what really happened.
  */
 function processUserMessage(mesId) {
     const cfg = settings();
@@ -395,34 +401,116 @@ function processUserMessage(mesId) {
     setPendingAsk(null);
     const typed = takeTypedAsk(msg.mes);
     if (typed) { ask = typed.mins; asleep = typed.asleep; msg.mes = typed.text; }
-    if (!ask) return;
-    snapshot(mesId);
-    let line;
-    try {
-        const g = passTime(ask, { what: msg.mes, asleep });
-        line = grantLine(g);
-        if (g.granted < g.asked) toast('info', line);
-    } catch (e) {
-        line = `⌛ no time passed: ${e.message}`;
-        toast('warning', line);
-    }
+    const acts = takeQueue();
+    if (!ask && !acts.length) return;
     msg.extra ??= {};
-    msg.extra.scifi_os = { applied: [line], failed: [] };
+    msg.extra.scifi_os = { applied: [], failed: [], acts, ask: ask || 0, asleep: !!asleep };
+    applyUserMessage(mesId, msg);
     if (Array.isArray(msg.swipes) && msg.swipe_id !== undefined) msg.swipes[msg.swipe_id] = msg.mes;
-    commit('time-ask');
     refreshPrompt();
 }
 
-/** Adds a small "telemetry updated" chip under a message that changed the state. */
+/** Carries out what a sent message asked for. Run again, from its snapshot, when one is undone. */
+function applyUserMessage(mesId, msg) {
+    const x = msg.extra.scifi_os;
+    snapshot(mesId);
+    const cur = S();
+    for (const a of x.acts ?? []) {
+        try { a.text = runIntent(a); a.ok = true; } catch (e) { a.ok = false; a.text = String(e.message ?? e); }
+    }
+    cur.lastActs = (x.acts ?? []).length ? x.acts.map(a => ({ ok: a.ok, text: a.text, line: a.line })) : null;
+    const bad = (x.acts ?? []).filter(a => !a.ok);
+    if (bad.length) toast('warning', bad.map(a => `${a.label}: ${a.text}`).join(' · '));
+    x.applied = [];
+    if (x.ask) {
+        let line;
+        try {
+            const g = passTime(x.ask, { what: msg.mes, asleep: x.asleep });
+            line = grantLine(g);
+            if (g.granted < g.asked) toast('info', line);
+        } catch (e) {
+            line = `⌛ no time passed: ${e.message}`;
+            toast('warning', line);
+        }
+        x.applied.push(line);
+    }
+    commit('time-ask');
+}
+
+/**
+ * Takes back one action of the player's latest message. The state goes back to just before the
+ * message, the reply that narrated it is removed, the rest of the message is carried out again,
+ * and the storyteller answers afresh.
+ */
+async function undoAct(mesId, idx) {
+    const c = ctx();
+    const msg = c.chat?.[mesId];
+    const x = msg?.extra?.scifi_os;
+    const act = x?.acts?.[idx];
+    if (!act) return;
+    const later = c.chat.slice(mesId + 1);
+    if (later.some(m => m.is_user && !m.is_system)) { toast('info', 'Only the actions of your latest message can be taken back.'); return; }
+    const replies = later.length;
+    if (replies && !(await confirmAsk(`Take back "${act.label}"?`, 'The reply after this message is removed too, and the storyteller answers again.'))) return;
+    for (let i = 0; i < replies; i++) {
+        if (typeof c.deleteLastMessage === 'function') await c.deleteLastMessage();
+        else { await c.executeSlashCommandsWithOptions?.(`/cut ${c.chat.length - 1}`); }
+    }
+    if (c.chat.length !== mesId + 1) { toast('error', 'Could not remove the reply. Delete it by hand, then try again.'); return; }
+    rollbackTo(mesId);
+    x.acts.splice(idx, 1);
+    msg.mes = cutLine(msg.mes, act.line);
+    if (Array.isArray(msg.swipes) && msg.swipe_id !== undefined) msg.swipes[msg.swipe_id] = msg.mes;
+    if (!msg.mes.trim() && !x.acts.length && !x.ask) {
+        // Nothing left of the message: it goes as well.
+        if (typeof c.deleteLastMessage === 'function') await c.deleteLastMessage();
+        commit('undo');
+        await c.saveChat?.();
+        refreshPrompt();
+        return;
+    }
+    applyUserMessage(mesId, msg);
+    try { c.updateMessageBlock?.(mesId, msg); } catch { /* not rendered */ }
+    decorateMessage(mesId);
+    await c.saveChat?.();
+    refreshPrompt();
+    if (replies) {
+        try { await c.executeSlashCommandsWithOptions?.('/trigger'); } catch { toast('info', 'Send to let the storyteller answer again.'); }
+    }
+}
+
+/**
+ * Chips under a message: what the engine did with it. The actions of the player's latest message
+ * carry a × to take them back.
+ */
 export function decorateMessage(mesId) {
-    const info = ctx().chat?.[mesId]?.extra?.scifi_os;
+    const c = ctx();
+    const info = c.chat?.[mesId]?.extra?.scifi_os;
     const el = document.querySelector(`#chat .mes[mesid="${mesId}"] .mes_block`);
     if (!el) return;
     el.querySelector('.sf-chip-row')?.remove();
-    if (!info?.applied?.length) return;
+    const acts = info?.acts ?? [];
+    if (!info?.applied?.length && !acts.length) return;
+    const latest = !c.chat.slice(mesId + 1).some(m => m.is_user && !m.is_system);
     const row = document.createElement('div');
     row.className = 'sf-chip-row';
-    for (const text of info.applied) {
+    acts.forEach((a, i) => {
+        const chip = document.createElement('span');
+        chip.className = `sf-chip sf-chip-act${a.ok === false ? ' bad' : ''}`;
+        chip.textContent = a.ok === false ? `${a.label}: ${a.text}` : (a.text || a.label);
+        chip.title = a.line ?? '';
+        if (latest && a.ok !== false) {
+            const x = document.createElement('button');
+            x.type = 'button';
+            x.className = 'sf-chip-x';
+            x.textContent = '×';
+            x.title = 'Take this action back';
+            x.addEventListener('click', (e) => { e.stopPropagation(); undoAct(mesId, i).catch(err => toast('error', err.message)); });
+            chip.appendChild(x);
+        }
+        row.appendChild(chip);
+    });
+    for (const text of info.applied ?? []) {
         const chip = document.createElement('span');
         chip.className = 'sf-chip';
         chip.textContent = text;
@@ -437,7 +525,7 @@ function decorateAll() {
 
 export function initAiLink() {
     on('MESSAGE_RECEIVED', (id, type) => { processMessage(Number(id), type); refreshPrompt(); });
-    on('MESSAGE_SENT', (id) => processUserMessage(Number(id)));
+    on('MESSAGE_SENT', (id) => { processUserMessage(Number(id)); setTimeout(decorateAll, 50); });
     on('USER_MESSAGE_RENDERED', (id) => { const n = Number(id); const m = ctx().chat?.[n]; if (m?.extra?.scifi_os) { try { ctx().updateMessageBlock?.(n, m); } catch { /* */ } decorateMessage(n); } });
     on('CHARACTER_MESSAGE_RENDERED', (id) => decorateMessage(Number(id)));
     on('MESSAGE_SWIPED', (id) => { if (rollbackTo(Number(id))) addLog('Timeline reverted (message swiped).', 'sys'); refreshPrompt(); });

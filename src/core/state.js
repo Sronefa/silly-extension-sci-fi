@@ -236,6 +236,16 @@ export function addLog(text, kind = 'info') {
     if (st.log.length > LOG_MAX) st.log.length = LOG_MAX;
 }
 
+/**
+ * Runs fn against the live state and then puts the state back exactly as it was, so an action
+ * can be tried (to see whether it would be refused, and what it would do) without happening.
+ */
+export function dryRun(fn) {
+    const meta = ctx().chatMetadata;
+    const saved = deepClone(meta[KEY]);
+    try { return fn(); } finally { meta[KEY] = saved; }
+}
+
 // ---- Snapshots, so swiping or deleting an AI message rolls back what it changed ----
 
 export function snapshot(mesId) {

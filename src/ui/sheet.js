@@ -12,6 +12,7 @@ import {
 import { runCommand, advanceTime, killPlayer } from '../systems/sim.js';
 import { syncHealth, isDown } from '../systems/body.js';
 import { blip } from './sfx.js';
+import { registerIntent, intent } from '../core/intents.js';
 
 const expanded = new Set();
 const TRAIN_CAP = 5;
@@ -209,6 +210,22 @@ export function initSheet(wizardApi) {
     registerTab({ id: 'sheet', label: 'Sheet', icon: 'fa-id-badge', order: 14, widgets: ['identity', 'skills', 'check', 'augments', 'training'] });
 
     const member = (id) => S().crew.find(c => c.id === id);
+    registerIntent('train', {
+        line: (a) => `I book a day's training in ${skillDef(a.id)?.name.toLowerCase() ?? 'a skill'}: eight hours of drills.`,
+        run: (a) => {
+            const st = S();
+            const def = skillDef(a.id);
+            if (!def) throw new Error('unknown skill');
+            const c = st.captain;
+            const cost = trainCost(st, c.skills[a.id] ?? 0);
+            if (c.credits < cost) throw new Error(`training costs ${fmtInt(cost)} cr`);
+            c.credits -= cost;
+            advanceTime(8 * 60);
+            const lv = gainXp(c, a.id, 30);
+            addLog(`Trained ${def.name} for 8 h (${fmtInt(cost)} cr).${lv ? ` Now level ${c.skills[a.id]}.` : ''}`, 'sys');
+            return lv ? `${def.name} improved to ${c.skills[a.id]} (${fmtInt(cost)} cr)` : `${def.name}: 8 h of training, ${fmtInt(cost)} cr`;
+        },
+    });
     registerActions({
         async 'sheet-look'() {
             const st = S();
@@ -228,19 +245,8 @@ export function initSheet(wizardApi) {
             if (last) toInput(`[${last.text}]`);
         },
         train(el) {
-            const st = S();
             const id = el.closest('.sf-panel-body').querySelector('[data-train="skill"]')?.value;
-            const def = skillDef(id);
-            if (!def) return;
-            const c = st.captain;
-            const cost = trainCost(st, c.skills[id] ?? 0);
-            if (c.credits < cost) { blip('error'); return toast('warning', `Training costs ${fmtInt(cost)} cr.`); }
-            c.credits -= cost;
-            advanceTime(8 * 60);
-            const lv = gainXp(c, id, 30);
-            addLog(`Trained ${def.name} for 8 h (${fmtInt(cost)} cr).${lv ? ` Now level ${c.skills[id]}.` : ''}`, 'sys');
-            toast(lv ? 'success' : 'info', lv ? `${def.name} improved to ${c.skills[id]}.` : `${def.name}: training logged.`);
-            commit('train');
+            if (skillDef(id)) intent('train', { id });
         },
         loadout(el) {
             const st = S();

@@ -16,6 +16,7 @@ import { onTick, fmtDuration } from '../systems/sim.js';
 import { registerPromptSection } from '../core/ailink.js';
 import { shipHas } from '../systems/market.js';
 import { blip } from './sfx.js';
+import { registerIntent, intent } from '../core/intents.js';
 
 const cr = (n) => `${fmtInt(n)} cr`;
 const KIND_COLOR = { command: '#60a5fa', weapons: '#f87171', engineering: '#fbbf24', crew: '#a78bfa', medical: '#34d399', flight: '#22d3ee', hold: '#a3a3a3', service: '#94a3b8', public: '#f472b6' };
@@ -111,14 +112,21 @@ export function initSalvageUi() {
     registerWidget({ id: 'svparts', title: () => 'Salvage in the hold', render: partsHtml, when: (st) => salvagedParts(st).length > 0 || st.captain.inventory.some(i => i.recorder) });
     registerTab({ id: 'wreck', label: 'Wreck', icon: 'fa-user-astronaut', order: 22.5, when: (st) => !st.custody && !!(st.salvage || boardable(st)), widgets: ['svwreck'], badge: (st) => (st.salvage && st.salvage.air < 60 ? '!' : '') });
     registerActions({
-        'sv-board'() { act(() => boardWreck()); },
+        'sv-board'() { intent('sv-board'); },
         'sv-go'(el) { act(() => moveRoom(el.dataset.to)); },
         'sv-search'() { act(() => searchRoom()); },
         'sv-take'(el) { act(() => takeLoot(el.dataset.id)); },
         async 'sv-stopcut'() { if (await confirmAsk('Stop cutting?', 'The part stays in the wreck.')) act(() => quit()); },
         'sv-leave'() { act(() => leaveWreck()); },
-        'sv-sell'(el) { act(() => sellPart(el.dataset.id)); },
-        'sv-stow'(el) { act(() => stowPart(el.dataset.id)); },
-        'sv-recorder'(el) { act(() => handInRecorder(el.dataset.id)); },
+        'sv-sell'(el) { intent('sv-sell', { id: el.dataset.id }); },
+        'sv-stow'(el) { intent('sv-stow', { id: el.dataset.id }); },
+        'sv-recorder'(el) { intent('sv-recorder', { id: el.dataset.id }); },
     });
+
+    // What these buttons write into the chat, and what the game does when it is sent.
+    const partName = (st, id) => (st.cargo.find(x => x.id === id)?.name ?? 'the salvaged part').replace(/^./, c => c.toLowerCase());
+    registerIntent('sv-board', { line: (a, st) => `I suit up and board the ${boardable(st)?.name ?? 'wreck'}.`, run: () => boardWreck() });
+    registerIntent('sv-sell', { line: (a, st) => `I sell ${partName(st, a.id)} to the yard.`, run: (a) => sellPart(a.id) });
+    registerIntent('sv-stow', { line: (a, st) => `I have the yard put ${partName(st, a.id)} in order and store it as a spare.`, run: (a) => stowPart(a.id) });
+    registerIntent('sv-recorder', { line: () => 'I hand the flight recorder in at the port office.', run: (a) => handInRecorder(a.id) });
 }

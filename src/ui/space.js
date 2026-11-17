@@ -20,6 +20,7 @@ import {
 import { registerCommand, onTick, fmtDuration } from '../systems/sim.js';
 import { registerPromptSection } from '../core/ailink.js';
 import { blip } from './sfx.js';
+import { registerIntent, intent } from '../core/intents.js';
 
 const cr = (n) => `${fmtInt(n)} cr`;
 let selRock = null;
@@ -205,12 +206,12 @@ export function initSpaceUi() {
     // No mining lasers, no mining tab.
     registerTab({ id: 'mining', label: 'Mining', icon: 'fa-meteor', order: 22, when: (st) => !st.custody && canMine(st), widgets: ['mnfield'], badge: (st) => (shipInField(st) ? '•' : '') });
     registerActions({
-        'sp-fly'(el) { act(() => flyTo(el.dataset.ref)); },
-        'sp-survey'(el) { act(() => startSurvey(Number(el.dataset.h))); },
-        async 'sp-stop'() { if (await confirmAsk('Stop now?', 'What is done so far is kept.')) act(() => quit()); },
-        'sp-chart'(el) { act(() => buyChart(Number(el.dataset.sys))); },
-        'sp-sell'(el) { act(() => sellData(el.dataset.id)); },
-        'sp-claim'(el) { act(() => fileClaim(el.dataset.id)); },
+        'sp-fly'(el) { intent('fly', { ref: el.dataset.ref }); },
+        'sp-survey'(el) { intent('sp-survey', { h: Number(el.dataset.h) }); },
+        async 'sp-stop'() { if (await confirmAsk('Stop now?', 'What is done so far is kept.')) intent('sp-stop'); },
+        'sp-chart'(el) { intent('sp-chart', { sys: Number(el.dataset.sys) }); },
+        'sp-sell'(el) { intent('sp-sell', { id: el.dataset.id }); },
+        'sp-claim'(el) { intent('sp-claim', { id: el.dataset.id }); },
         'mn-rock'(el) { selRock = el.dataset.id; commit('view'); },
         'mn-plot'(el, ev) {
             if (ev.target.closest?.('[data-sf="mn-rock"]')) return;
@@ -222,7 +223,16 @@ export function initSpaceUi() {
         },
         'mn-approach'() { act(() => approach(selRock)); },
         'mn-scan'() { act(() => scanRocks()); },
-        'mn-cut'(el) { act(() => startMining(Number(el.dataset.h))); },
+        'mn-cut'(el) { intent('mn-cut', { h: Number(el.dataset.h) }); },
     });
+
+    // What these buttons write into the chat, and what the game does when it is sent.
+    const siteName = (st, id) => siteBook(st) && (sitesOf(st.seed, Number(String(id).split(':')[0])).find(s => s.id === id)?.name ?? 'the site');
+    registerIntent('sp-survey', { line: (a) => `I run a sensor survey of the area for ${a.h} hours.`, run: (a) => startSurvey(a.h) });
+    registerIntent('sp-stop', { line: (a, st) => `I stop ${(st.activity?.name ?? 'what I am doing').toLowerCase()}.`, run: () => quit() });
+    registerIntent('sp-chart', { line: (a) => `I buy the survey charts of ${galaxy()?.systems[a.sys]?.name ?? 'that system'} at the port office.`, run: (a) => buyChart(a.sys) });
+    registerIntent('sp-sell', { line: (a, st) => `I sell my survey data on ${siteName(st, a.id)} at the port office.`, run: (a) => sellData(a.id) });
+    registerIntent('sp-claim', { line: (a, st) => `I file a mining claim on ${siteName(st, a.id)}.`, run: (a) => fileClaim(a.id) });
+    registerIntent('mn-cut', { line: (a) => `I start cutting ore with the mining lasers for ${a.h} hours.`, run: (a) => startMining(a.h) });
     void isKnown;
 }
